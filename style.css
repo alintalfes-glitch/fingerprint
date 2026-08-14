@@ -1,5 +1,8 @@
 @import url('https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
 
+/* ============================================
+   Variabile globale
+   ============================================ */
 :root {
   --bg: #0b1218;
   --bg-panel: #111d26;
@@ -15,13 +18,16 @@
   --font-body: 'IBM Plex Mono', monospace;
 }
 
+/* ============================================
+   Reset de bază
+   ============================================ */
 * {
   box-sizing: border-box;
+  margin: 0;
+  padding: 0;
 }
 
 html, body {
-  margin: 0;
-  padding: 0;
   min-height: 100%;
 }
 
@@ -30,9 +36,13 @@ body {
   color: var(--text);
   font-family: var(--font-body);
   line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
-/* Grid de fundal redus ca intensitate */
+/* ============================================
+   Grid de fundal discret
+   ============================================ */
 body::before {
   content: "";
   position: fixed;
@@ -45,6 +55,9 @@ body::before {
   z-index: 0;
 }
 
+/* ============================================
+   Elemente de bază poziționate deasupra gridului
+   ============================================ */
 .app-header,
 .app-main,
 .app-footer {
@@ -52,7 +65,9 @@ body::before {
   z-index: 1;
 }
 
-/* Header */
+/* ============================================
+   Header
+   ============================================ */
 .app-header {
   display: flex;
   align-items: center;
@@ -129,13 +144,18 @@ body::before {
   background: rgba(255, 180, 84, 0.08);
 }
 
-/* Main */
+/* ============================================
+   Conținut principal
+   ============================================ */
 .app-main {
   max-width: 1000px;
   margin: 0 auto;
   padding: 20px 16px;
 }
 
+/* ============================================
+   Panou de încărcare
+   ============================================ */
 .upload-section {
   background: var(--bg-panel);
   border: 1px solid var(--border);
@@ -146,26 +166,33 @@ body::before {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
   gap: 16px;
+  width: 100%;
 }
 
 .upload-card {
   display: flex;
   flex-direction: column;
   gap: 6px;
+  min-width: 0;               /* previne depășirea lățimii */
 }
 
-/* Zone upload */
+/* ============================================
+   Zone de upload
+   ============================================ */
 .upload-zone {
   position: relative;
   display: flex;
   align-items: center;
   justify-content: center;
-  min-height: 200px;
+  min-height: 180px;
   border: 2px dashed var(--border);
   background: var(--bg-panel-2);
   cursor: pointer;
   transition: border-color 0.2s, box-shadow 0.2s, background-color 0.2s;
   overflow: hidden;
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
 }
 
 .upload-zone:hover,
@@ -189,10 +216,14 @@ body::before {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 8px;
+  justify-content: center;
+  gap: 6px;
   pointer-events: none;
   text-align: center;
   padding: 12px;
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
 }
 
 .drop-icon {
@@ -214,20 +245,23 @@ body::before {
   color: var(--text-dim);
 }
 
+/* Buton personalizat pentru alegere fișier */
 .upload-btn {
   display: inline-block;
-  padding: 8px 20px;
+  padding: 6px 16px;
   margin-top: 4px;
   background: var(--accent-cyan);
   color: #06121a;
   font-weight: 600;
-  font-size: 0.85rem;
+  font-size: 0.8rem;
   letter-spacing: 0.5px;
   text-transform: uppercase;
   border: none;
   cursor: pointer;
   pointer-events: auto;
   transition: background 0.2s;
+  white-space: nowrap;
+  max-width: 100%;
 }
 
 .upload-zone:hover .upload-btn,
@@ -239,15 +273,21 @@ body::before {
   display: none;
 }
 
+/* Previzualizare imagine */
 .preview-canvas {
   display: none;
   max-width: 100%;
-  max-height: 200px;
+  max-height: 160px;
   object-fit: contain;
+  width: auto;
+  height: auto;
 }
 
 .upload-zone.has-image .preview-canvas {
   display: block;
+  max-width: 100%;
+  max-height: 160px;
+  margin: 0 auto;
 }
 
 .file-name {
@@ -258,7 +298,9 @@ body::before {
   white-space: nowrap;
 }
 
-/* Butoane acțiuni */
+/* ============================================
+   Butoane de acțiune
+   ============================================ */
 .actions {
   margin-top: 20px;
   display: flex;
@@ -324,7 +366,9 @@ body::before {
   to { transform: rotate(360deg); }
 }
 
-/* Mesaj eroare */
+/* ============================================
+   Mesaj de eroare
+   ============================================ */
 .error-message {
   margin-top: 16px;
   padding: 12px 16px;
@@ -334,7 +378,9 @@ body::before {
   font-size: 0.85rem;
 }
 
-/* Loading global */
+/* ============================================
+   Indicator de încărcare
+   ============================================ */
 .loading {
   display: flex;
   align-items: center;
@@ -357,7 +403,9 @@ body::before {
   animation: spin 0.8s linear infinite;
 }
 
-/* Rezultate */
+/* ============================================
+   Panou de rezultate
+   ============================================ */
 .results {
   margin-top: 24px;
   background: var(--bg-panel);
@@ -435,12 +483,14 @@ body::before {
 .result-figure {
   margin: 0;
   text-align: center;
+  min-width: 0;
 }
 
 .result-canvas {
   max-width: 100%;
   background: #000;
   border: 1px solid var(--border);
+  display: block;
 }
 
 .result-figure figcaption {
@@ -449,7 +499,9 @@ body::before {
   color: var(--text-dim);
 }
 
-/* Footer */
+/* ============================================
+   Footer
+   ============================================ */
 .app-footer {
   margin-top: 24px;
   padding: 16px 20px;
@@ -464,12 +516,17 @@ body::before {
   font-weight: 500;
 }
 
+/* ============================================
+   Accesibilitate: focus vizibil
+   ============================================ */
 :focus-visible {
   outline: 3px solid var(--accent-amber);
   outline-offset: 4px;
 }
 
-/* Responsive mobile */
+/* ============================================
+   Media queries pentru ecrane mici
+   ============================================ */
 @media (max-width: 600px) {
   .app-header {
     padding: 12px 16px;
@@ -509,24 +566,40 @@ body::before {
 
   .upload-grid {
     grid-template-columns: 1fr;
-    gap: 14px;
+    gap: 12px;
+    width: 100%;
   }
 
   .upload-zone {
-    min-height: 160px;
+    min-height: 140px;
+    width: 100%;
+  }
+
+  .upload-placeholder {
+    padding: 10px;
+    gap: 5px;
   }
 
   .drop-icon {
-    font-size: 1.6rem;
+    font-size: 1.4rem;
   }
 
   .drop-title {
-    font-size: 1rem;
+    font-size: 0.95rem;
+  }
+
+  .drop-hint {
+    font-size: 0.7rem;
   }
 
   .upload-btn {
-    padding: 6px 16px;
-    font-size: 0.8rem;
+    padding: 5px 12px;
+    font-size: 0.75rem;
+  }
+
+  .preview-canvas,
+  .upload-zone.has-image .preview-canvas {
+    max-height: 120px;
   }
 
   .score-value {
@@ -536,16 +609,6 @@ body::before {
   .actions {
     flex-direction: column;
     align-items: center;
-  }
-
-  .compare-btn,
-  .reset-btn {
-    width: 100%;
-    max-width: 300px;
-  }
-
-  /* Bară de acțiuni sticky pe mobil */
-  .actions {
     position: fixed;
     bottom: 0;
     left: 0;
@@ -563,7 +626,25 @@ body::before {
     padding-bottom: 80px; /* spațiu pentru bara sticky */
   }
 
+  .compare-btn,
+  .reset-btn {
+    width: 100%;
+    max-width: 300px;
+  }
+
   .reset-btn {
     min-width: 100px;
+  }
+}
+
+/* ============================================
+   Preferințe pentru reducerea mișcării
+   ============================================ */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
   }
 }
