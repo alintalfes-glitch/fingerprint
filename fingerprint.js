@@ -5,25 +5,20 @@
   // ============================================================
   // Constante globale pentru procesare și matching
   // ============================================================
-  const BLOCK_SIZE = 16;                    // dimensiunea blocurilor pentru orientare/mască/frecvență
-  const MAX_WORK_SIZE = 500;                // latura maximă a imaginii de lucru (px)
-  const FOREGROUND_STD_THRESHOLD = 12;      // prag deviație standard pentru masca foreground
-  const ADAPTIVE_THRESHOLD_DELTA = 8;       // delta sub media locală pentru binarizare adaptivă
-  const MINUTIA_MIN_DIST = 8;               // distanță minimă între minuții păstrate
-  const MAX_MINUTIAE = 100;                 // numărul maxim de minuții extrase pentru matching
-  const MATCH_DISTANCE_THRESHOLD = 12;      // prag distanță (px) pentru perechi potrivite
-  const MATCH_ANGLE_THRESHOLD = 20 * Math.PI / 180; // prag unghi (radiani) pentru perechi potrivite
-  const MAX_MATCH_CANDIDATES = 60;          // limităm perechile candidat pentru a nu bloca browserul
+  const BLOCK_SIZE = 16;
+  const MAX_WORK_SIZE = 500;
+  const FOREGROUND_STD_THRESHOLD = 12;
+  const ADAPTIVE_THRESHOLD_DELTA = 8;
+  const MINUTIA_MIN_DIST = 8;
+  const MAX_MINUTIAE = 100;
+  const MATCH_DISTANCE_THRESHOLD = 12;
+  const MATCH_ANGLE_THRESHOLD = 20 * Math.PI / 180;
+  const MAX_MATCH_CANDIDATES = 60;
 
   // ============================================================
   // Funcții utilitare pentru imagine
   // ============================================================
 
-  /**
-   * Încarcă un fișier imagine într-un HTMLImageElement.
-   * @param {File} file - fișierul selectat de utilizator.
-   * @returns {Promise<HTMLImageElement>}
-   */
   function loadImage(file) {
     return new Promise((resolve, reject) => {
       const url = URL.createObjectURL(file);
@@ -40,11 +35,6 @@
     });
   }
 
-  /**
-   * Creează un canvas de lucru redimensionat la maxim 500px pe latura mare.
-   * @param {HTMLImageElement} img
-   * @returns {HTMLCanvasElement}
-   */
   function createWorkCanvas(img) {
     const maxSize = MAX_WORK_SIZE;
     let w = img.naturalWidth || img.width;
@@ -61,13 +51,6 @@
     return canvas;
   }
 
-  /**
-   * Extrage pixelii grayscale dintr-un context canvas.
-   * @param {CanvasRenderingContext2D} ctx
-   * @param {number} w
-   * @param {number} h
-   * @returns {Uint8ClampedArray} - valori 0-255, lungime w*h.
-   */
   function getGrayscale(ctx, w, h) {
     const imageData = ctx.getImageData(0, 0, w, h);
     const data = imageData.data;
@@ -78,13 +61,6 @@
     return gray;
   }
 
-  /**
-   * Normalizează contrastul (media și varianța) conform metodei Hong et al.
-   * @param {Uint8ClampedArray} gray - imagine grayscale 0-255.
-   * @param {number} w
-   * @param {number} h
-   * @returns {Uint8ClampedArray} - imagine normalizată 0-255.
-   */
   function normalizeContrast(gray, w, h) {
     const len = w * h;
     let sum = 0;
@@ -100,7 +76,6 @@
     variance /= len;
     const std = Math.sqrt(variance);
 
-    // Dacă imaginea este aproape uniformă, nu amplificăm zgomotul.
     if (std < 1e-6) {
       return new Uint8ClampedArray(gray);
     }
@@ -115,13 +90,6 @@
     return out;
   }
 
-  /**
-   * Scrie imaginea normalizată înapoi într-un canvas, ca ImageData.
-   * @param {HTMLCanvasElement} canvas
-   * @param {Uint8ClampedArray} gray
-   * @param {number} w
-   * @param {number} h
-   */
   function putNormalizedToCanvas(canvas, gray, w, h) {
     const ctx = canvas.getContext('2d');
     const imageData = ctx.createImageData(w, h);
@@ -135,17 +103,6 @@
     ctx.putImageData(imageData, 0, 0);
   }
 
-  // ============================================================
-  // Pasul 3: Estimarea câmpului de orientare a crestelor
-  // ============================================================
-
-  /**
-   * Calculează gradienții Sobel pe imaginea grayscale.
-   * @param {Uint8ClampedArray} gray
-   * @param {number} w
-   * @param {number} h
-   * @returns {{gx: Float32Array, gy: Float32Array}}
-   */
   function computeSobel(gray, w, h) {
     const gx = new Float32Array(w * h);
     const gy = new Float32Array(w * h);
@@ -169,15 +126,6 @@
     return { gx, gy };
   }
 
-  /**
-   * Estimează orientarea dominantă a crestelor per bloc.
-   * Unghiul este în radiani, în intervalul [0, π).
-   * @param {{gx: Float32Array, gy: Float32Array}} gradients
-   * @param {number} w
-   * @param {number} h
-   * @param {number} blockSize
-   * @returns {{orient: Float32Array, blockW: number, blockH: number}}
-   */
   function computeOrientationField(gradients, w, h, blockSize) {
     const { gx, gy } = gradients;
     const blockW = Math.ceil(w / blockSize);
@@ -212,32 +160,12 @@
     return { orient, blockW, blockH };
   }
 
-  /**
-   * Returnează orientarea blocului care conține punctul (x, y).
-   * @param {number} x
-   * @param {number} y
-   * @param {Float32Array} orient
-   * @param {number} blockW
-   * @param {number} blockH
-   * @param {number} blockSize
-   * @returns {number} - unghi în radiani.
-   */
   function getOrientationAt(x, y, orient, blockW, blockH, blockSize) {
     const bx = Math.max(0, Math.min(blockW - 1, Math.floor(x / blockSize)));
     const by = Math.max(0, Math.min(blockH - 1, Math.floor(y / blockSize)));
     return orient[by * blockW + bx];
   }
 
-  // ============================================================
-  // Pasul 4: Estimarea frecvenței crestelor
-  // ============================================================
-
-  /**
-   * Netezește un array 1D cu un filtru mobil simplu.
-   * @param {Float32Array} arr
-   * @param {number} radius
-   * @returns {Float32Array}
-   */
   function smooth(arr, radius) {
     const out = new Float32Array(arr.length);
     for (let i = 0; i < arr.length; i++) {
@@ -255,24 +183,13 @@
     return out;
   }
 
-  /**
-   * Estimează frecvența medie a crestelor pentru fiecare bloc.
-   * Proiectează pixelii blocului pe direcția perpendiculară orientării
-   * și măsoară distanța medie dintre minimele locale (crestele întunecate).
-   * @param {Uint8ClampedArray} gray
-   * @param {{orient: Float32Array, blockW: number, blockH: number}} orientField
-   * @param {number} w
-   * @param {number} h
-   * @param {number} blockSize
-   * @returns {Float32Array} - frecvențe per bloc (1/px), valori implicite 0.1.
-   */
   function estimateFrequency(gray, orientField, w, h, blockSize) {
     const { orient, blockW, blockH } = orientField;
     const freq = new Float32Array(blockW * blockH).fill(0.1);
 
     for (let by = 0; by < blockH; by++) {
       for (let bx = 0; bx < blockW; bx++) {
-        const angle = orient[by * blockW + bx] + Math.PI / 2; // perpendicular pe creste
+        const angle = orient[by * blockW + bx] + Math.PI / 2;
         const cx = (bx + 0.5) * blockSize;
         const cy = (by + 0.5) * blockSize;
 
@@ -308,7 +225,6 @@
 
         const smoothed = smooth(proj, 3);
 
-        // Găsim minime locale care corespund crestelor întunecate.
         const minima = [];
         for (let b = 2; b < bins - 2; b++) {
           if (
@@ -337,18 +253,6 @@
     return freq;
   }
 
-  // ============================================================
-  // Pasul 5: Segmentare foreground/background
-  // ============================================================
-
-  /**
-   * Determină blocurile care conțin amprentă, bazat pe deviația standard locală.
-   * @param {Uint8ClampedArray} gray
-   * @param {number} w
-   * @param {number} h
-   * @param {number} blockSize
-   * @returns {{mask: Uint8Array, blockW: number, blockH: number}}
-   */
   function segment(gray, w, h, blockSize) {
     const blockW = Math.ceil(w / blockSize);
     const blockH = Math.ceil(h / blockSize);
@@ -390,20 +294,6 @@
     return { mask, blockW, blockH };
   }
 
-  // ============================================================
-  // Pasul 6: Binarizare adaptivă
-  // ============================================================
-
-  /**
-   * Binarizează imaginea folosind un prag local per bloc.
-   * Păstrează crestele întunecate ca 1 și restul ca 0.
-   * @param {Uint8ClampedArray} gray
-   * @param {{mask: Uint8Array, blockW: number, blockH: number}} maskField
-   * @param {number} w
-   * @param {number} h
-   * @param {number} blockSize
-   * @returns {Uint8Array} - imagine binară (0/1).
-   */
   function adaptiveBinarize(gray, maskField, w, h, blockSize) {
     const { mask, blockW, blockH } = maskField;
     const binary = new Uint8Array(w * h);
@@ -440,18 +330,6 @@
     return binary;
   }
 
-  // ============================================================
-  // Pasul 7: Scheletonizare (Zhang-Suen)
-  // ============================================================
-
-  /**
-   * Aplică algoritmul Zhang-Suen pentru a subția liniile la 1 pixel grosime.
-   * Obiectul (crestele) are valoarea 1, fundalul 0.
-   * @param {Uint8Array} binary
-   * @param {number} w
-   * @param {number} h
-   * @returns {Uint8Array} - schelet binar.
-   */
   function zhangSuen(binary, w, h) {
     let img = new Uint8Array(binary);
     let step = 0;
@@ -461,7 +339,6 @@
       changed = false;
       const marker = new Uint8Array(w * h);
 
-      // Prima iterație parțială
       for (let y = 1; y < h - 1; y++) {
         for (let x = 1; x < w - 1; x++) {
           const i = y * w + x;
@@ -507,7 +384,6 @@
       changed = false;
       const marker2 = new Uint8Array(w * h);
 
-      // A doua iterație parțială
       for (let y = 1; y < h - 1; y++) {
         for (let x = 1; x < w - 1; x++) {
           const i = y * w + x;
@@ -554,20 +430,6 @@
     return img;
   }
 
-  // ============================================================
-  // Pasul 8: Extragerea minuțiilor
-  // ============================================================
-
-  /**
-   * Detectează terminații (CN=1) și bifurcații (CN=3) pe schelet.
-   * @param {Uint8Array} thinned
-   * @param {{orient: Float32Array, blockW: number, blockH: number}} orientField
-   * @param {{mask: Uint8Array, blockW: number, blockH: number}} maskField
-   * @param {number} w
-   * @param {number} h
-   * @param {number} blockSize
-   * @returns {Array<{x:number,y:number,angle:number,type:string}>}
-   */
   function extractMinutiae(thinned, orientField, maskField, w, h, blockSize) {
     const { orient, blockW, blockH } = orientField;
     const minutiae = [];
@@ -608,24 +470,9 @@
     return minutiae;
   }
 
-  // ============================================================
-  // Pasul 9: Filtrarea minuțiilor false
-  // ============================================================
-
-  /**
-   * Elimină minuțiile de pe marginea zonei segmentate și pe cele prea apropiate.
-   * @param {Array} minutiae
-   * @param {{mask: Uint8Array, blockW: number, blockH: number}} maskField
-   * @param {number} w
-   * @param {number} h
-   * @param {number} blockSize
-   * @param {number} minDist
-   * @returns {Array} - minuții filtrate, limitate la MAX_MINUTIAE.
-   */
   function filterMinutiae(minutiae, maskField, w, h, blockSize, minDist = MINUTIA_MIN_DIST) {
     const { mask, blockW, blockH } = maskField;
 
-    // Verificăm dacă minuția este lângă un bloc de fundal/margine.
     const isNearBoundary = (x, y) => {
       const bx = Math.floor(x / blockSize);
       const by = Math.floor(y / blockSize);
@@ -641,7 +488,6 @@
 
     const filtered = minutiae.filter(m => !isNearBoundary(m.x, m.y));
 
-    // Eliminăm minuțiile foarte apropiate, păstrând una singură.
     const kept = [];
     for (const m of filtered) {
       let tooClose = false;
@@ -659,30 +505,11 @@
     return kept.length > MAX_MINUTIAE ? kept.slice(0, MAX_MINUTIAE) : kept;
   }
 
-  // ============================================================
-  // Algoritmul de matching bazat pe aliniere
-  // ============================================================
-
-  /**
-   * Calculează diferența unghiulară modulo π (orientare de linie, nu vector direcțional).
-   * @param {number} a - unghi în radiani
-   * @param {number} b - unghi în radiani
-   * @returns {number} - diferența în intervalul [0, π/2].
-   */
   function angleDiff(a, b) {
     const d = Math.abs(a - b) % Math.PI;
     return d > Math.PI / 2 ? Math.PI - d : d;
   }
 
-  /**
-   * Aplică o transformare (rotație + translație) unui punct din setul A.
-   * Transformarea aliniază punctul de referință A pe cel de referință B.
-   * @param {{x:number,y:number,angle:number}} p - punctul de transformat
-   * @param {{x:number,y:number,angle:number}} refA
-   * @param {{x:number,y:number,angle:number}} refB
-   * @param {number} theta - unghiul de rotație
-   * @returns {{x:number,y:number,angle:number}}
-   */
   function transformPoint(p, refA, refB, theta) {
     const cos = Math.cos(theta);
     const sin = Math.sin(theta);
@@ -695,12 +522,6 @@
     };
   }
 
-  /**
-   * Găsește cea mai bună aliniere și calculează scorul de similaritate.
-   * @param {Array} minA - minuții set A
-   * @param {Array} minB - minuții set B
-   * @returns {{score:number, pairs:Array, matchedCount:number}}
-   */
   function matchMinutiae(minA, minB) {
     if (!minA.length || !minB.length) {
       return { score: 0, pairs: [], matchedCount: 0 };
@@ -764,49 +585,30 @@
     };
   }
 
-  // ============================================================
-  // Funcția principală de procesare a unei amprente
-  // ============================================================
-
-  /**
-   * Procesează un fișier imagine: încărcare, normalizare, orientare,
-   * frecvență, segmentare, binarizare, scheletonizare, extragere minuții.
-   * @param {File} file
-   * @returns {Promise<{canvas:HTMLCanvasElement, width:number, height:number, minutiae:Array}>}
-   */
   async function processFile(file) {
     const img = await loadImage(file);
     const canvas = createWorkCanvas(img);
     const w = canvas.width;
     const h = canvas.height;
 
-    // 1-2. Extragere grayscale și normalizare contrast
     const gray = getGrayscale(canvas.getContext('2d'), w, h);
     const normalized = normalizeContrast(gray, w, h);
 
-    // Punem imaginea normalizată în canvas pentru afișare.
     putNormalizedToCanvas(canvas, normalized, w, h);
 
-    // 3. Câmpul de orientare
     const gradients = computeSobel(normalized, w, h);
     const orientField = computeOrientationField(gradients, w, h, BLOCK_SIZE);
 
-    // 4. Frecvența crestelor
     const frequency = estimateFrequency(normalized, orientField, w, h, BLOCK_SIZE);
 
-    // 5. Mască foreground/background
     const maskField = segment(normalized, w, h, BLOCK_SIZE);
 
-    // 6. Binarizare adaptivă
     const binary = adaptiveBinarize(normalized, maskField, w, h, BLOCK_SIZE);
 
-    // 7. Scheletonizare Zhang-Suen
     const thinned = zhangSuen(binary, w, h);
 
-    // 8. Extragerea minuțiilor
     const rawMinutiae = extractMinutiae(thinned, orientField, maskField, w, h, BLOCK_SIZE);
 
-    // 9. Filtrarea minuțiilor false
     const minutiae = filterMinutiae(rawMinutiae, maskField, w, h, BLOCK_SIZE, MINUTIA_MIN_DIST);
 
     return {
@@ -814,7 +616,6 @@
       width: w,
       height: h,
       minutiae,
-      // Expunem câteva elemente pentru debugging/educație, fără a fi necesare.
       debug: {
         frequency,
         mask: maskField.mask,
@@ -823,20 +624,10 @@
     };
   }
 
-  // ============================================================
-  // Funcție pentru afișarea minuțiilor pe canvas
-  // ============================================================
-
-  /**
-   * Desenează minuțiile peste imaginea deja afișată pe canvas.
-   * @param {HTMLCanvasElement} canvas
-   * @param {Array} minutiae
-   */
   function drawMinutiae(canvas, minutiae) {
     const ctx = canvas.getContext('2d');
 
     for (const m of minutiae) {
-      // Cerc pentru minuție
       ctx.beginPath();
       ctx.arc(m.x, m.y, 4, 0, 2 * Math.PI);
       ctx.fillStyle = m.type === 'ending' ? '#3fd68c' : '#35d0ff';
@@ -845,7 +636,6 @@
       ctx.lineWidth = 1;
       ctx.stroke();
 
-      // Linie de orientare
       const len = 8;
       ctx.beginPath();
       ctx.moveTo(m.x, m.y);
@@ -856,9 +646,6 @@
     }
   }
 
-  // ============================================================
-  // API public
-  // ============================================================
   window.FingerprintProcessor = {
     processFile,
     matchMinutiae,
