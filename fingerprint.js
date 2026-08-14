@@ -597,7 +597,6 @@
       return branch;
     }
 
-    // Găsim toate terminațiile și pornim trace
     for (let y = 0; y < h; y++) {
       for (let x = 0; x < w; x++) {
         if (img[y * w + x] === 1 && !visited[y * w + x] && isEndPoint(x, y)) {
