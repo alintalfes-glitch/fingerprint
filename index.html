@@ -127,7 +127,7 @@
       const resultB = document.getElementById('resultB');
 
       const MATCH_THRESHOLD = 45; // %
-      const state = { fileA: null, fileB: null, fpA: null, fpB: null };
+      const state = { fileA: null, fileB: null, fpA: null, fpB: null, processing: false };
 
       // Setup zone de upload
       function setupZone(zone, input, preview, fileName, side) {
@@ -199,8 +199,8 @@
 
       function updateButtons() {
         const hasBoth = !!(state.fileA && state.fileB);
-        compareBtn.disabled = !hasBoth;
-        resetBtn.disabled = !(state.fileA || state.fileB);
+        compareBtn.disabled = !hasBoth || state.processing;
+        resetBtn.disabled = (!state.fileA && !state.fileB) || state.processing;
       }
 
       function showError(msg) {
@@ -210,6 +210,9 @@
       }
 
       function resetAll() {
+        // Dacă procesarea este în curs, o anulăm
+        state.processing = false;
+
         state.fileA = null;
         state.fileB = null;
         state.fpA = null;
@@ -239,6 +242,10 @@
         verdictEl.className = 'verdict';
         scoreBarFill.style.width = '0%';
 
+        // Restabilim butonul de comparare
+        compareBtnText.textContent = 'Compară amprentele';
+        compareBtnSpinner.hidden = true;
+
         updateButtons();
       }
 
@@ -262,7 +269,6 @@
         verdictEl.textContent = isMatch ? 'Amprentele par să corespundă' : 'Amprentele nu corespund';
         verdictEl.className = 'verdict ' + (isMatch ? 'match' : 'no-match');
 
-        // Bară de scor
         scoreBarFill.style.width = Math.max(0, Math.min(100, score)) + '%';
         scoreBarFill.style.backgroundColor = isMatch ? 'var(--accent-green)' : 'var(--accent-red)';
 
@@ -270,15 +276,14 @@
       }
 
       compareBtn.addEventListener('click', async () => {
-        if (!state.fileA || !state.fileB) return;
+        if (!state.fileA || !state.fileB || state.processing) return;
 
-        compareBtn.disabled = true;
-        resetBtn.disabled = true;
+        state.processing = true;
+        updateButtons();
         loading.hidden = false;
         results.hidden = true;
         errorMessage.hidden = true;
 
-        // Schimbăm textul butonului și afișăm spinner-ul
         compareBtnText.textContent = 'Se analizează…';
         compareBtnSpinner.hidden = false;
 
@@ -301,12 +306,11 @@
           scoreBarFill.style.width = '0%';
           results.hidden = false;
         } finally {
-          // Restabilim butonul
+          state.processing = false;
           compareBtnText.textContent = 'Compară amprentele';
           compareBtnSpinner.hidden = true;
-          compareBtn.disabled = false;
-          resetBtn.disabled = false;
           loading.hidden = true;
+          updateButtons();
         }
       });
 
