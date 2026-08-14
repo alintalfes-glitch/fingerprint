@@ -607,23 +607,19 @@ body::before {
   }
 
   .actions {
+    position: static;
     flex-direction: column;
     align-items: center;
-    position: fixed;
-    bottom: 0;
-    left: 0;
-    right: 0;
-    background: rgba(11, 18, 24, 0.9);
-    backdrop-filter: blur(8px);
-    padding: 10px 16px;
-    margin: 0;
-    z-index: 100;
-    border-top: 1px solid var(--border);
+    background: none;
+    backdrop-filter: none;
+    padding: 0;
+    margin: 20px 0 0;
+    border-top: none;
     gap: 10px;
   }
 
   body {
-    padding-bottom: 80px; /* spațiu pentru bara sticky */
+    padding-bottom: 0;
   }
 
   .compare-btn,
