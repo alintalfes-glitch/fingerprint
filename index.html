@@ -50,6 +50,7 @@
 
       <div class="actions">
         <button id="compareBtn" class="compare-btn" disabled>Compară amprentele</button>
+        <button id="resetBtn" class="reset-btn" disabled>Resetează</button>
       </div>
     </section>
 
@@ -98,6 +99,7 @@
       const fileNameA = document.getElementById('fileNameA');
       const fileNameB = document.getElementById('fileNameB');
       const compareBtn = document.getElementById('compareBtn');
+      const resetBtn = document.getElementById('resetBtn');
       const loading = document.getElementById('loading');
       const results = document.getElementById('results');
       const scoreEl = document.getElementById('score');
@@ -155,7 +157,7 @@
             const zone = side === 'A' ? zoneA : zoneB;
             drawImageToCanvas(canvas, img, 300, 220);
             zone.classList.add('has-image');
-            updateCompareBtn();
+            updateButtons();
           };
           img.src = e.target.result;
         };
@@ -171,8 +173,46 @@
         ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
       }
 
-      function updateCompareBtn() {
+      function updateButtons() {
         compareBtn.disabled = !(state.fileA && state.fileB);
+        resetBtn.disabled = !(state.fileA || state.fileB);
+      }
+
+      function resetAll() {
+        // Reset state
+        state.fileA = null;
+        state.fileB = null;
+        state.fpA = null;
+        state.fpB = null;
+
+        // Clear file inputs
+        fileA.value = '';
+        fileB.value = '';
+
+        // Clear preview canvases and remove image class
+        [previewA, previewB].forEach(canvas => {
+          canvas.width = 0;
+          canvas.height = 0;
+        });
+        zoneA.classList.remove('has-image');
+        zoneB.classList.remove('has-image');
+
+        // Clear file names
+        fileNameA.textContent = '';
+        fileNameB.textContent = '';
+
+        // Hide results and loading
+        results.hidden = true;
+        loading.hidden = true;
+
+        // Clear result canvases
+        resultA.width = 0;
+        resultB.width = 0;
+        scoreEl.textContent = '—';
+        verdictEl.textContent = '…';
+        verdictEl.className = 'verdict';
+
+        updateButtons();
       }
 
       function showResults(fpA, fpB, matchResult) {
@@ -202,6 +242,7 @@
         if (!state.fileA || !state.fileB) return;
 
         compareBtn.disabled = true;
+        resetBtn.disabled = true;
         loading.hidden = false;
         results.hidden = true;
 
@@ -223,13 +264,16 @@
           results.hidden = false;
         } finally {
           compareBtn.disabled = false;
+          resetBtn.disabled = false;
           loading.hidden = true;
         }
       });
 
+      resetBtn.addEventListener('click', resetAll);
+
       setupZone(zoneA, fileA, previewA, fileNameA, 'A');
       setupZone(zoneB, fileB, previewB, fileNameB, 'B');
-      updateCompareBtn();
+      updateButtons();
     })();
   </script>
 </body>
