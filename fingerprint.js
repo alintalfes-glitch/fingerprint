@@ -8,8 +8,8 @@
   const BLOCK_SIZE = 16;                      // dimensiunea blocului pentru orientare/mască/frecvență
   const MAX_WORK_SIZE = 500;                  // latura maximă a imaginii de lucru (px)
   const FOREGROUND_STD_THRESHOLD = 8;         // prag deviație standard pentru masca foreground (mai permisiv)
-  const ADAPTIVE_WINDOW = 13;                 // dimensiunea ferestrei locale pentru binarizare adaptivă (mai fină)
-  const ADAPTIVE_K = 0.5;                     // factorul de corecție pentru pragul local
+  const ADAPTIVE_WINDOW = 15;                 // dimensiunea ferestrei locale pentru binarizare adaptivă (mai fină)
+  const ADAPTIVE_K = 0.4;                     // factorul de corecție pentru pragul local (mai permisiv)
   const MINUTIA_MIN_DIST_BASE = 8;            // distanță de bază minimă între minuții (px)
   const MAX_MINUTIAE = 120;                   // numărul maxim de minuții extrase
   const MATCH_DISTANCE_THRESHOLD = 15;        // prag distanță (px) pentru perechi potrivite
@@ -17,9 +17,10 @@
   const MATCH_SIGMA_DIST = 5;                 // sigma pentru ponderare distanță
   const MATCH_SIGMA_ANGLE = 10 * Math.PI / 180; // sigma pentru ponderare unghi
   const MAX_MATCH_CANDIDATES = 80;            // limităm perechile candidat pentru performanță
-  const PRUNE_MIN_LENGTH = 6;                 // lungime minimă a ramurilor păstrate în schelet
+  const PRUNE_MIN_LENGTH = 8;                 // lungime minimă a ramurilor păstrate în schelet
   const ROTATION_FINE_STEPS = 7;              // număr de variații fine de rotație testate
-  const ROTATION_FINE_RANGE = 8 * Math.PI / 180; // intervalul de căutare fină (±8 grade)
+  const ROTATION_FINE_RANGE = 10 * Math.PI / 180; // intervalul de căutare fină (±10 grade)
+  const SCALE_STEPS = 3;                      // factori de scalare: 0.95, 1.0, 1.05
 
   // ============================================================
   // Funcții utilitare pentru imagine
@@ -366,7 +367,7 @@
   // ============================================================
   // Pasul 6: Binarizare adaptivă îmbunătățită
   // ============================================================
-  // Folosim o fereastră locală de 13x13 pentru a calcula media și
+  // Folosim o fereastră locală de 15x15 pentru a calcula media și
   // deviația standard. Pragul = media - ADAPTIVE_K * std.
   // Calcul rapid folosind imaginea integrală pentru sumă și sumă de pătrate.
 
@@ -432,7 +433,56 @@
       }
     }
 
-    return binary;
+    // Post-procesare: închidere morfologică pentru a conecta mici rupturi
+    return morphologicalClosing(binary, w, h);
+  }
+
+  /**
+   * Închidere morfologică (dilation urmată de erosion) pe imaginea binară.
+   * Obiectul (crestele) are valoarea 1, fundalul 0.
+   * @param {Uint8Array} binary - imaginea binară
+   * @param {number} w
+   * @param {number} h
+   * @returns {Uint8Array} - imaginea după closing
+   */
+  function morphologicalClosing(binary, w, h) {
+    const dilated = new Uint8Array(w * h);
+    const eroded = new Uint8Array(w * h);
+
+    // Dilation cu element structural 3x3
+    for (let y = 1; y < h - 1; y++) {
+      for (let x = 1; x < w - 1; x++) {
+        const i = y * w + x;
+        if (binary[i] === 1) {
+          for (let dy = -1; dy <= 1; dy++) {
+            for (let dx = -1; dx <= 1; dx++) {
+              dilated[(y + dy) * w + (x + dx)] = 1;
+            }
+          }
+        }
+      }
+    }
+
+    // Erosion cu element structural 3x3
+    for (let y = 1; y < h - 1; y++) {
+      for (let x = 1; x < w - 1; x++) {
+        let allOne = true;
+        for (let dy = -1; dy <= 1; dy++) {
+          for (let dx = -1; dx <= 1; dx++) {
+            if (dilated[(y + dy) * w + (x + dx)] !== 1) {
+              allOne = false;
+              break;
+            }
+          }
+          if (!allOne) break;
+        }
+        if (allOne) {
+          eroded[y * w + x] = 1;
+        }
+      }
+    }
+
+    return eroded;
   }
 
   // ============================================================
@@ -775,11 +825,11 @@
     return d > Math.PI / 2 ? Math.PI - d : d;
   }
 
-  function transformPoint(p, refA, refB, theta) {
+  function transformPoint(p, refA, refB, theta, scale) {
     const cos = Math.cos(theta);
     const sin = Math.sin(theta);
-    const dx = p.x - refA.x;
-    const dy = p.y - refA.y;
+    const dx = (p.x - refA.x) * scale;
+    const dy = (p.y - refA.y) * scale;
     return {
       x: refB.x + dx * cos - dy * sin,
       y: refB.y + dx * sin + dy * cos,
@@ -792,8 +842,8 @@
    * Calculează scorul de potrivire pentru o transformare dată.
    * Întoarce numărul de perechi potrivite și scorul ponderat.
    */
-  function evaluateTransformation(listA, listB, theta, refA, refB) {
-    const transformed = listA.map(p => transformPoint(p, refA, refB, theta));
+  function evaluateTransformation(listA, listB, theta, scale, refA, refB) {
+    const transformed = listA.map(p => transformPoint(p, refA, refB, theta, scale));
     const usedB = new Array(listB.length).fill(false);
     const matches = [];
 
@@ -829,12 +879,22 @@
       }
     }
 
-    const matchedCount = matches.length;
-    const totalQuality = matches.reduce((sum, m) => sum + m.quality, 0);
+    // Filtru suplimentar: păstrăm doar perechile care au cel puțin o altă pereche în vecinătate
+    const filteredMatches = matches.filter(match => {
+      for (const other of matches) {
+        if (other === match) continue;
+        const dist = Math.hypot(match.a.x - other.a.x, match.a.y - other.a.y);
+        if (dist < 30) return true;
+      }
+      return false;
+    });
+
+    const matchedCount = filteredMatches.length;
+    const totalQuality = filteredMatches.reduce((sum, m) => sum + m.quality, 0);
     const avgCount = (listA.length + listB.length) / 2;
     const score = totalQuality / Math.max(1, avgCount);
 
-    return { matchedCount, qualityScore: score, matches };
+    return { matchedCount, qualityScore: score, matches: filteredMatches };
   }
 
   function matchMinutiae(minA, minB) {
@@ -847,25 +907,29 @@
 
     let bestResult = { matchedCount: 0, qualityScore: 0, matches: [] };
 
-    for (const refA of listA) {
-      for (const refB of listB) {
-        const baseTheta = refB.angle - refA.angle;
-        // Testăm rotații fine în jurul a două soluții posibile
-        const rotations = [];
-        for (let k = -ROTATION_FINE_STEPS; k <= ROTATION_FINE_STEPS; k++) {
-          const delta = (ROTATION_FINE_RANGE * k) / ROTATION_FINE_STEPS;
-          rotations.push(baseTheta + delta);
-        }
-        for (let k = -ROTATION_FINE_STEPS; k <= ROTATION_FINE_STEPS; k++) {
-          const delta = (ROTATION_FINE_RANGE * k) / ROTATION_FINE_STEPS;
-          rotations.push(baseTheta + Math.PI + delta);
-        }
+    const scales = [0.95, 1.0, 1.05]; // factori de scalare pentru a compensa presiunea
 
-        for (const theta of rotations) {
-          const result = evaluateTransformation(listA, listB, theta, refA, refB);
-          if (result.matchedCount > bestResult.matchedCount ||
-              (result.matchedCount === bestResult.matchedCount && result.qualityScore > bestResult.qualityScore)) {
-            bestResult = result;
+    for (const scale of scales) {
+      for (const refA of listA) {
+        for (const refB of listB) {
+          const baseTheta = refB.angle - refA.angle;
+          // Testăm rotații fine în jurul a două soluții posibile
+          const rotations = [];
+          for (let k = -ROTATION_FINE_STEPS; k <= ROTATION_FINE_STEPS; k++) {
+            const delta = (ROTATION_FINE_RANGE * k) / ROTATION_FINE_STEPS;
+            rotations.push(baseTheta + delta);
+          }
+          for (let k = -ROTATION_FINE_STEPS; k <= ROTATION_FINE_STEPS; k++) {
+            const delta = (ROTATION_FINE_RANGE * k) / ROTATION_FINE_STEPS;
+            rotations.push(baseTheta + Math.PI + delta);
+          }
+
+          for (const theta of rotations) {
+            const result = evaluateTransformation(listA, listB, theta, scale, refA, refB);
+            if (result.matchedCount > bestResult.matchedCount ||
+                (result.matchedCount === bestResult.matchedCount && result.qualityScore > bestResult.qualityScore)) {
+              bestResult = result;
+            }
           }
         }
       }
