@@ -10,9 +10,13 @@
   <header class="app-header">
     <div class="logo">
       <span class="logo-mark">DA</span>
-      <div>
+      <span class="logo-separator"></span>
+      <div class="logo-text">
         <h1>Dactilo</h1>
-        <p class="subtitle">Analiză comparativă a minuțiilor</p>
+        <p class="subtitle">
+          <span class="subtitle-full">Analiză comparativă de minuții</span>
+          <span class="subtitle-short">Comparație amprente</span>
+        </p>
       </div>
     </div>
     <div class="header-badge">modul demonstrativ</div>
@@ -25,10 +29,11 @@
           <div class="upload-zone" id="zoneA" tabindex="0" role="button" aria-label="Încarcă prima amprentă">
             <input type="file" accept="image/*" class="file-input" id="fileA">
             <canvas class="preview-canvas" id="previewA"></canvas>
-            <div class="upload-placeholder">
-              <span class="drop-icon">⌁</span>
+            <div class="upload-placeholder" id="placeholderA">
+              <span class="drop-icon">⬆</span>
               <span class="drop-title">Amprenta A</span>
-              <span class="drop-hint">Trage fișierul aici sau <u>alege</u></span>
+              <span class="drop-hint">Trage fișierul aici sau</span>
+              <span class="upload-btn">Alege fișier</span>
             </div>
           </div>
           <div class="file-name" id="fileNameA"></div>
@@ -38,31 +43,40 @@
           <div class="upload-zone" id="zoneB" tabindex="0" role="button" aria-label="Încarcă a doua amprentă">
             <input type="file" accept="image/*" class="file-input" id="fileB">
             <canvas class="preview-canvas" id="previewB"></canvas>
-            <div class="upload-placeholder">
-              <span class="drop-icon">⌁</span>
+            <div class="upload-placeholder" id="placeholderB">
+              <span class="drop-icon">⬆</span>
               <span class="drop-title">Amprenta B</span>
-              <span class="drop-hint">Trage fișierul aici sau <u>alege</u></span>
+              <span class="drop-hint">Trage fișierul aici sau</span>
+              <span class="upload-btn">Alege fișier</span>
             </div>
           </div>
           <div class="file-name" id="fileNameB"></div>
         </div>
       </div>
-
-      <div class="actions">
-        <button id="compareBtn" class="compare-btn" disabled>Compară amprentele</button>
-        <button id="resetBtn" class="reset-btn" disabled>Resetează</button>
-      </div>
     </section>
+
+    <div class="actions">
+      <button id="compareBtn" class="compare-btn" disabled>
+        <span class="btn-spinner" id="compareBtnSpinner" hidden></span>
+        <span class="btn-text" id="compareBtnText">Compară amprentele</span>
+      </button>
+      <button id="resetBtn" class="reset-btn" disabled>Resetează</button>
+    </div>
+
+    <div id="errorMessage" class="error-message" hidden></div>
 
     <div id="loading" class="loading" hidden>
       <span class="spinner" aria-hidden="true"></span>
-      <span>Procesare imagini și potrivire minuții…</span>
+      <span>Se procesează imaginile…</span>
     </div>
 
     <section id="results" class="results" hidden aria-live="polite">
       <div class="score-panel">
         <div class="score-label">Scor de similaritate</div>
         <div id="score" class="score-value">—</div>
+        <div class="score-bar-container">
+          <div id="scoreBarFill" class="score-bar-fill"></div>
+        </div>
         <div id="verdict" class="verdict">…</div>
       </div>
 
@@ -90,6 +104,7 @@
     (function() {
       'use strict';
 
+      // Elemente DOM
       const zoneA = document.getElementById('zoneA');
       const zoneB = document.getElementById('zoneB');
       const fileA = document.getElementById('fileA');
@@ -99,17 +114,22 @@
       const fileNameA = document.getElementById('fileNameA');
       const fileNameB = document.getElementById('fileNameB');
       const compareBtn = document.getElementById('compareBtn');
+      const compareBtnText = document.getElementById('compareBtnText');
+      const compareBtnSpinner = document.getElementById('compareBtnSpinner');
       const resetBtn = document.getElementById('resetBtn');
       const loading = document.getElementById('loading');
+      const errorMessage = document.getElementById('errorMessage');
       const results = document.getElementById('results');
       const scoreEl = document.getElementById('score');
+      const scoreBarFill = document.getElementById('scoreBarFill');
       const verdictEl = document.getElementById('verdict');
       const resultA = document.getElementById('resultA');
       const resultB = document.getElementById('resultB');
-      const MATCH_THRESHOLD = 45; // %
 
+      const MATCH_THRESHOLD = 45; // %
       const state = { fileA: null, fileB: null, fpA: null, fpB: null };
 
+      // Setup zone de upload
       function setupZone(zone, input, preview, fileName, side) {
         zone.addEventListener('click', () => input.click());
         zone.addEventListener('keydown', (e) => {
@@ -128,9 +148,7 @@
           e.preventDefault();
           zone.classList.add('dragover');
         });
-        zone.addEventListener('dragleave', () => {
-          zone.classList.remove('dragover');
-        });
+        zone.addEventListener('dragleave', () => zone.classList.remove('dragover'));
         zone.addEventListener('drop', (e) => {
           e.preventDefault();
           zone.classList.remove('dragover');
@@ -140,7 +158,11 @@
       }
 
       function loadPreview(file, side) {
-        if (!file || !file.type.startsWith('image/')) return;
+        if (!file || !file.type.startsWith('image/')) {
+          showError('Format de fișier invalid. Te rugăm să încarci o imagine.');
+          return;
+        }
+
         if (side === 'A') {
           state.fileA = file;
           fileNameA.textContent = file.name;
@@ -159,8 +181,10 @@
             zone.classList.add('has-image');
             updateButtons();
           };
+          img.onerror = () => showError('Nu s-a putut citi imaginea.');
           img.src = e.target.result;
         };
+        reader.onerror = () => showError('Eroare la citirea fișierului.');
         reader.readAsDataURL(file);
       }
 
@@ -174,22 +198,26 @@
       }
 
       function updateButtons() {
-        compareBtn.disabled = !(state.fileA && state.fileB);
+        const hasBoth = !!(state.fileA && state.fileB);
+        compareBtn.disabled = !hasBoth;
         resetBtn.disabled = !(state.fileA || state.fileB);
       }
 
+      function showError(msg) {
+        errorMessage.textContent = msg;
+        errorMessage.hidden = false;
+        setTimeout(() => { errorMessage.hidden = true; }, 5000);
+      }
+
       function resetAll() {
-        // Reset state
         state.fileA = null;
         state.fileB = null;
         state.fpA = null;
         state.fpB = null;
 
-        // Clear file inputs
         fileA.value = '';
         fileB.value = '';
 
-        // Clear preview canvases and remove image class
         [previewA, previewB].forEach(canvas => {
           canvas.width = 0;
           canvas.height = 0;
@@ -197,20 +225,19 @@
         zoneA.classList.remove('has-image');
         zoneB.classList.remove('has-image');
 
-        // Clear file names
         fileNameA.textContent = '';
         fileNameB.textContent = '';
 
-        // Hide results and loading
         results.hidden = true;
         loading.hidden = true;
+        errorMessage.hidden = true;
 
-        // Clear result canvases
         resultA.width = 0;
         resultB.width = 0;
         scoreEl.textContent = '—';
         verdictEl.textContent = '…';
         verdictEl.className = 'verdict';
+        scoreBarFill.style.width = '0%';
 
         updateButtons();
       }
@@ -235,6 +262,10 @@
         verdictEl.textContent = isMatch ? 'Amprentele par să corespundă' : 'Amprentele nu corespund';
         verdictEl.className = 'verdict ' + (isMatch ? 'match' : 'no-match');
 
+        // Bară de scor
+        scoreBarFill.style.width = Math.max(0, Math.min(100, score)) + '%';
+        scoreBarFill.style.backgroundColor = isMatch ? 'var(--accent-green)' : 'var(--accent-red)';
+
         results.hidden = false;
       }
 
@@ -245,6 +276,11 @@
         resetBtn.disabled = true;
         loading.hidden = false;
         results.hidden = true;
+        errorMessage.hidden = true;
+
+        // Schimbăm textul butonului și afișăm spinner-ul
+        compareBtnText.textContent = 'Se analizează…';
+        compareBtnSpinner.hidden = false;
 
         await new Promise(r => setTimeout(r, 30));
 
@@ -258,11 +294,16 @@
           showResults(fpA, fpB, matchResult);
         } catch (err) {
           console.error(err);
-          verdictEl.textContent = 'Eroare la procesarea imaginilor.';
+          showError('Eroare la procesarea imaginilor. Verifică dacă fișierele sunt valide și încearcă din nou.');
+          verdictEl.textContent = 'Eroare la procesare';
           verdictEl.className = 'verdict no-match';
           scoreEl.textContent = '—';
+          scoreBarFill.style.width = '0%';
           results.hidden = false;
         } finally {
+          // Restabilim butonul
+          compareBtnText.textContent = 'Compară amprentele';
+          compareBtnSpinner.hidden = true;
           compareBtn.disabled = false;
           resetBtn.disabled = false;
           loading.hidden = true;
