@@ -78,6 +78,7 @@
           <div id="scoreBarFill" class="score-bar-fill"></div>
         </div>
         <div id="verdict" class="verdict">…</div>
+        <div id="matchDetails" class="match-details"></div>
       </div>
 
       <div class="result-canvases">
@@ -127,11 +128,13 @@
       const scoreEl = document.getElementById('score');
       const scoreBarFill = document.getElementById('scoreBarFill');
       const verdictEl = document.getElementById('verdict');
+      const matchDetails = document.getElementById('matchDetails');
       const resultA = document.getElementById('resultA');
       const resultB = document.getElementById('resultB');
       const appVersion = document.getElementById('appVersion');
 
-      const MATCH_THRESHOLD = 45; // %
+      // Pragul de similaritate setat la 30% (mai permisiv)
+      const MATCH_THRESHOLD = 30;
       const state = { fileA: null, fileB: null, fpA: null, fpB: null, processing: false };
 
       // Încarcă versiunea din version.json
@@ -258,6 +261,7 @@
         verdictEl.textContent = '…';
         verdictEl.className = 'verdict';
         scoreBarFill.style.width = '0%';
+        matchDetails.textContent = '';
 
         compareBtnText.textContent = 'Compară amprentele';
         compareBtnSpinner.hidden = true;
@@ -288,7 +292,17 @@
         scoreBarFill.style.width = Math.max(0, Math.min(100, score)) + '%';
         scoreBarFill.style.backgroundColor = isMatch ? 'var(--accent-green)' : 'var(--accent-red)';
 
+        // Afișăm detalii diagnostice
+        const totalMinutiae = (fpA.minutiae.length + fpB.minutiae.length) / 2;
+        matchDetails.textContent = `Potriviri: ${matchResult.matchedCount} / ${Math.round(totalMinutiae)} medie · Minuții A: ${fpA.minutiae.length}, B: ${fpB.minutiae.length}`;
+
         results.hidden = false;
+
+        // Log în consolă pentru diagnoză
+        console.log('Scor:', score, '%');
+        console.log('Perechi potrivite:', matchResult.matchedCount);
+        console.log('Minuții A:', fpA.minutiae.length, 'Minuții B:', fpB.minutiae.length);
+        console.log('Rezultat matchResult:', matchResult);
       }
 
       compareBtn.addEventListener('click', async () => {
@@ -320,6 +334,7 @@
           verdictEl.className = 'verdict no-match';
           scoreEl.textContent = '—';
           scoreBarFill.style.width = '0%';
+          matchDetails.textContent = '';
           results.hidden = false;
         } finally {
           state.processing = false;
