@@ -61,8 +61,18 @@
     return gray;
   }
 
+  /**
+   * Normalizează contrastul (media și varianța) conform metodei Hong et al.
+   * @param {Uint8ClampedArray} gray - imagine grayscale 0-255.
+   * @param {number} w
+   * @param {number} h
+   * @returns {Uint8ClampedArray} - imagine normalizată 0-255.
+   */
   function normalizeContrast(gray, w, h) {
     const len = w * h;
+    // Evităm diviziunea la zero pentru imagini goale (caz extrem)
+    if (len === 0) return new Uint8ClampedArray(gray);
+
     let sum = 0;
     for (let i = 0; i < len; i++) sum += gray[i];
 
@@ -102,6 +112,10 @@
     }
     ctx.putImageData(imageData, 0, 0);
   }
+
+  // ============================================================
+  // Pasul 3: Estimarea câmpului de orientare a crestelor
+  // ============================================================
 
   function computeSobel(gray, w, h) {
     const gx = new Float32Array(w * h);
@@ -165,6 +179,10 @@
     const by = Math.max(0, Math.min(blockH - 1, Math.floor(y / blockSize)));
     return orient[by * blockW + bx];
   }
+
+  // ============================================================
+  // Pasul 4: Estimarea frecvenței crestelor
+  // ============================================================
 
   function smooth(arr, radius) {
     const out = new Float32Array(arr.length);
@@ -253,6 +271,10 @@
     return freq;
   }
 
+  // ============================================================
+  // Pasul 5: Segmentare foreground/background
+  // ============================================================
+
   function segment(gray, w, h, blockSize) {
     const blockW = Math.ceil(w / blockSize);
     const blockH = Math.ceil(h / blockSize);
@@ -294,6 +316,10 @@
     return { mask, blockW, blockH };
   }
 
+  // ============================================================
+  // Pasul 6: Binarizare adaptivă
+  // ============================================================
+
   function adaptiveBinarize(gray, maskField, w, h, blockSize) {
     const { mask, blockW, blockH } = maskField;
     const binary = new Uint8Array(w * h);
@@ -330,6 +356,10 @@
     return binary;
   }
 
+  // ============================================================
+  // Pasul 7: Scheletonizare (Zhang-Suen)
+  // ============================================================
+
   function zhangSuen(binary, w, h) {
     let img = new Uint8Array(binary);
     let step = 0;
@@ -339,6 +369,7 @@
       changed = false;
       const marker = new Uint8Array(w * h);
 
+      // Prima iterație parțială
       for (let y = 1; y < h - 1; y++) {
         for (let x = 1; x < w - 1; x++) {
           const i = y * w + x;
@@ -384,6 +415,7 @@
       changed = false;
       const marker2 = new Uint8Array(w * h);
 
+      // A doua iterație parțială
       for (let y = 1; y < h - 1; y++) {
         for (let x = 1; x < w - 1; x++) {
           const i = y * w + x;
@@ -430,6 +462,10 @@
     return img;
   }
 
+  // ============================================================
+  // Pasul 8: Extragerea minuțiilor
+  // ============================================================
+
   function extractMinutiae(thinned, orientField, maskField, w, h, blockSize) {
     const { orient, blockW, blockH } = orientField;
     const minutiae = [];
@@ -470,6 +506,10 @@
     return minutiae;
   }
 
+  // ============================================================
+  // Pasul 9: Filtrarea minuțiilor false
+  // ============================================================
+
   function filterMinutiae(minutiae, maskField, w, h, blockSize, minDist = MINUTIA_MIN_DIST) {
     const { mask, blockW, blockH } = maskField;
 
@@ -505,6 +545,10 @@
     return kept.length > MAX_MINUTIAE ? kept.slice(0, MAX_MINUTIAE) : kept;
   }
 
+  // ============================================================
+  // Algoritmul de matching bazat pe aliniere
+  // ============================================================
+
   function angleDiff(a, b) {
     const d = Math.abs(a - b) % Math.PI;
     return d > Math.PI / 2 ? Math.PI - d : d;
@@ -522,6 +566,12 @@
     };
   }
 
+  /**
+   * Găsește cea mai bună aliniere și calculează scorul de similaritate.
+   * @param {Array} minA - minuții set A
+   * @param {Array} minB - minuții set B
+   * @returns {{score:number, pairs:Array, matchedCount:number}}
+   */
   function matchMinutiae(minA, minB) {
     if (!minA.length || !minB.length) {
       return { score: 0, pairs: [], matchedCount: 0 };
@@ -535,45 +585,52 @@
 
     for (const refA of listA) {
       for (const refB of listB) {
-        const theta = refB.angle - refA.angle;
+        // Diferența de unghi de bază (modulo π)
+        const baseTheta = refB.angle - refA.angle;
 
-        const transformed = listA.map(p => transformPoint(p, refA, refB, theta));
-        const usedB = new Array(listB.length).fill(false);
-        const matches = [];
+        // Încercăm ambele rotații posibile: θ și θ+π
+        // deoarece orientarea crestelor este definită doar modulo π.
+        const rotations = [baseTheta, baseTheta + Math.PI];
 
-        for (const tp of transformed) {
-          let bestIdx = -1;
-          let bestDist = MATCH_DISTANCE_THRESHOLD;
+        for (const theta of rotations) {
+          const transformed = listA.map(p => transformPoint(p, refA, refB, theta));
+          const usedB = new Array(listB.length).fill(false);
+          const matches = [];
 
-          for (let j = 0; j < listB.length; j++) {
-            if (usedB[j]) continue;
-            const b = listB[j];
+          for (const tp of transformed) {
+            let bestIdx = -1;
+            let bestDist = MATCH_DISTANCE_THRESHOLD;
 
-            const d = Math.hypot(tp.x - b.x, tp.y - b.y);
-            if (d <= bestDist && angleDiff(tp.angle, b.angle) <= MATCH_ANGLE_THRESHOLD) {
-              bestDist = d;
-              bestIdx = j;
+            for (let j = 0; j < listB.length; j++) {
+              if (usedB[j]) continue;
+              const b = listB[j];
+
+              const d = Math.hypot(tp.x - b.x, tp.y - b.y);
+              if (d <= bestDist && angleDiff(tp.angle, b.angle) <= MATCH_ANGLE_THRESHOLD) {
+                bestDist = d;
+                bestIdx = j;
+              }
+            }
+
+            if (bestIdx >= 0) {
+              usedB[bestIdx] = true;
+              matches.push({
+                a: tp,
+                b: listB[bestIdx],
+                distance: bestDist
+              });
             }
           }
 
-          if (bestIdx >= 0) {
-            usedB[bestIdx] = true;
-            matches.push({
-              a: tp,
-              b: listB[bestIdx],
-              distance: bestDist
-            });
+          const matchedCount = matches.length;
+          const totalA = minA.length;
+          const totalB = minB.length;
+          const score = (matchedCount / ((totalA + totalB) / 2)) * 100;
+
+          if (matchedCount > bestMatches.length) {
+            bestMatches = matches;
+            bestScore = score;
           }
-        }
-
-        const matchedCount = matches.length;
-        const totalA = minA.length;
-        const totalB = minB.length;
-        const score = (matchedCount / ((totalA + totalB) / 2)) * 100;
-
-        if (matchedCount > bestMatches.length) {
-          bestMatches = matches;
-          bestScore = score;
         }
       }
     }
@@ -584,6 +641,10 @@
       matchedCount: bestMatches.length
     };
   }
+
+  // ============================================================
+  // Funcția principală de procesare a unei amprente
+  // ============================================================
 
   async function processFile(file) {
     const img = await loadImage(file);
@@ -624,6 +685,10 @@
     };
   }
 
+  // ============================================================
+  // Funcție pentru afișarea minuțiilor pe canvas
+  // ============================================================
+
   function drawMinutiae(canvas, minutiae) {
     const ctx = canvas.getContext('2d');
 
@@ -646,6 +711,9 @@
     }
   }
 
+  // ============================================================
+  // API public
+  // ============================================================
   window.FingerprintProcessor = {
     processFile,
     matchMinutiae,
