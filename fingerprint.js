@@ -5,19 +5,21 @@
   // ============================================================
   // Constante globale pentru procesare și matching
   // ============================================================
-  const BLOCK_SIZE = 16;                     // dimensiunea blocului pentru orientare/mască/frecvență
-  const MAX_WORK_SIZE = 500;                 // latura maximă a imaginii de lucru (px)
-  const FOREGROUND_STD_THRESHOLD = 10;       // prag deviație standard pentru masca foreground
-  const ADAPTIVE_WINDOW = 15;                // dimensiunea ferestrei locale pentru binarizare adaptivă
-  const ADAPTIVE_K = 0.5;                    // factorul de corecție pentru pragul local
-  const MINUTIA_MIN_DIST_BASE = 8;           // distanță de bază minimă între minuții (px)
-  const MAX_MINUTIAE = 100;                  // numărul maxim de minuții extrase
-  const MATCH_DISTANCE_THRESHOLD = 12;       // prag distanță (px) pentru perechi potrivite
-  const MATCH_ANGLE_THRESHOLD = 20 * Math.PI / 180; // prag unghi (radiani) pentru perechi potrivite
-  const MATCH_SIGMA_DIST = 5;                // sigma pentru ponderare distanță
+  const BLOCK_SIZE = 16;                      // dimensiunea blocului pentru orientare/mască/frecvență
+  const MAX_WORK_SIZE = 500;                  // latura maximă a imaginii de lucru (px)
+  const FOREGROUND_STD_THRESHOLD = 10;        // prag deviație standard pentru masca foreground
+  const ADAPTIVE_WINDOW = 15;                 // dimensiunea ferestrei locale pentru binarizare adaptivă
+  const ADAPTIVE_K = 0.5;                     // factorul de corecție pentru pragul local
+  const MINUTIA_MIN_DIST_BASE = 8;            // distanță de bază minimă între minuții (px)
+  const MAX_MINUTIAE = 120;                   // numărul maxim de minuții extrase
+  const MATCH_DISTANCE_THRESHOLD = 15;        // prag distanță (px) pentru perechi potrivite
+  const MATCH_ANGLE_THRESHOLD = 25 * Math.PI / 180; // prag unghi (radiani) pentru perechi potrivite
+  const MATCH_SIGMA_DIST = 5;                 // sigma pentru ponderare distanță
   const MATCH_SIGMA_ANGLE = 10 * Math.PI / 180; // sigma pentru ponderare unghi
-  const MAX_MATCH_CANDIDATES = 60;           // limităm perechile candidat pentru performanță
-  const PRUNE_MIN_LENGTH = 8;                // lungime minimă a ramurilor păstrate în schelet
+  const MAX_MATCH_CANDIDATES = 80;            // limităm perechile candidat pentru performanță
+  const PRUNE_MIN_LENGTH = 6;                 // lungime minimă a ramurilor păstrate în schelet
+  const ROTATION_FINE_STEPS = 5;              // număr de variații fine de rotație testate
+  const ROTATION_FINE_RANGE = 10 * Math.PI / 180; // intervalul de căutare fină (±10 grade)
 
   // ============================================================
   // Funcții utilitare pentru imagine
@@ -207,7 +209,6 @@
 
         if (count > 0) {
           const avgAngle = 0.5 * Math.atan2(sumSin, sumCos);
-          // Normalizare la [0, π)
           smoothed[by * blockW + bx] = (avgAngle < 0) ? avgAngle + Math.PI : avgAngle;
         } else {
           smoothed[by * blockW + bx] = orient[by * blockW + bx];
@@ -215,7 +216,6 @@
       }
     }
 
-    // Copiem rezultatul înapoi
     for (let i = 0; i < orient.length; i++) {
       orient[i] = smoothed[i];
     }
@@ -371,44 +371,40 @@
   // Calcul rapid folosind imaginea integrală pentru sumă și sumă de pătrate.
 
   function computeIntegralImages(gray, w, h) {
-    const integral = new Float64Array((w + 1) * (h + 1));
-    const integralSq = new Float64Array((w + 1) * (h + 1));
+    const iw = w + 1;
+    const ih = h + 1;
+    const integral = new Float64Array(iw * ih);
+    const integralSq = new Float64Array(iw * ih);
 
     for (let y = 1; y <= h; y++) {
       for (let x = 1; x <= w; x++) {
         const idx = (y - 1) * w + (x - 1);
         const v = gray[idx];
-        const iPrev = (y - 1) * (w + 1) + x;
-        const jPrev = y * (w + 1) + (x - 1);
-        const ijPrev = (y - 1) * (w + 1) + (x - 1);
-        const iCurr = y * (w + 1) + x;
+        const iCurr = y * iw + x;
+        const iPrev = (y - 1) * iw + x;
+        const jPrev = y * iw + (x - 1);
+        const ijPrev = (y - 1) * iw + (x - 1);
 
         integral[iCurr] = integral[iPrev] + integral[jPrev] - integral[ijPrev] + v;
         integralSq[iCurr] = integralSq[iPrev] + integralSq[jPrev] - integralSq[ijPrev] + v * v;
       }
     }
 
-    return { integral, integralSq, width: w + 1, height: h + 1 };
+    return { integral, integralSq, iw, ih };
   }
 
   function adaptiveBinarize(gray, maskField, w, h, blockSize) {
-    const { mask } = maskField;
-    const { integral, integralSq, width: iw, height: ih } = computeIntegralImages(gray, w, h);
+    const { mask, blockW } = maskField;
+    const { integral, integralSq, iw, ih } = computeIntegralImages(gray, w, h);
     const binary = new Uint8Array(w * h);
     const windowHalf = Math.floor(ADAPTIVE_WINDOW / 2);
 
     for (let y = 0; y < h; y++) {
-      const bx = Math.floor(x => x / blockSize); // placeholder, nu folosim aici
-    }
-
-    // Iterăm pixel cu pixel
-    for (let y = 0; y < h; y++) {
       for (let x = 0; x < w; x++) {
-        // Determinăm blocul pentru mască
         const blockX = Math.floor(x / blockSize);
         const blockY = Math.floor(y / blockSize);
         // Dacă blocul nu este foreground, rămâne 0
-        if (mask[blockY * Math.ceil(w / blockSize) + blockX] === 0) {
+        if (mask[blockY * blockW + blockX] === 0) {
           binary[y * w + x] = 0;
           continue;
         }
@@ -421,7 +417,7 @@
 
         const area = (x2 - x1 + 1) * (y2 - y1 + 1);
 
-        // Coordonate în imaginea integrală (indexate de la 1)
+        // Coordonate în imaginea integrală (indexate de la 0)
         const ix1 = x1;
         const iy1 = y1;
         const ix2 = x2 + 1;
@@ -619,10 +615,8 @@
             let remove = true;
             const [lastX, lastY] = branch[branch.length - 1];
             if (isEndPoint(lastX, lastY) && branch.length >= 2) {
-              // Ramura dintre două terminații scurte: eliminăm doar dacă ambele capete sunt terminații
               remove = true;
             } else if (isJunction(lastX, lastY) && branch.length < minLength) {
-              // Ramura scurtă atașată la joncțiune: eliminăm, dar păstrăm joncțiunea
               remove = true;
             } else {
               remove = false;
@@ -635,7 +629,6 @@
             }
           }
 
-          // Marcăm ramura ca vizitată indiferent dacă am eliminat sau nu
           for (const [px, py] of branch) {
             visited[py * w + px] = 1;
           }
@@ -654,7 +647,6 @@
     const { orient, blockW, blockH } = orientField;
     const minutiae = [];
 
-    // Folosim coordonate pe schelet
     for (let y = 1; y < h - 1; y++) {
       for (let x = 1; x < w - 1; x++) {
         const i = y * w + x;
@@ -677,34 +669,24 @@
         cn /= 2;
 
         if (cn === 1 || cn === 3) {
-          // Determinăm tipul
           const type = cn === 1 ? 'ending' : 'bifurcation';
-
-          // Calculăm unghiul local al crestei din vecinătate
-          const angle = getLocalAngle(thinned, x, y, w, h, type);
-
-          minutiae.push({
-            x,
-            y,
-            angle,
-            type
-          });
+          // Calculăm unghiul local al crestei folosind orientarea blocului + direcția locală
+          const angle = getLocalAngle(thinned, x, y, w, h, orient, blockW, blockH, blockSize, type);
+          minutiae.push({ x, y, angle, type });
         }
       }
     }
 
-    // Filtrarea inițială a minuțiilor false (va fi rafinată mai jos)
+    // Filtrarea minuțiilor false (va fi rafinată mai jos)
     return filterMinutiae(minutiae, maskField, freqField, w, h, blockSize);
   }
 
   /**
-   * Calculează unghiul local al minuției folosind direcția dominantă a crestelor din jur.
-   * Pentru terminație, unghiul este direcția de la minuție spre interiorul crestei.
-   * Pentru bifurcație, unghiul este media direcțiilor celor trei ramuri.
+   * Calculează unghiul local al minuției folosind atât orientarea blocului,
+   * cât și direcția reală a crestelor din jur. Pentru terminații și bifurcații.
    */
-  function getLocalAngle(thinned, cx, cy, w, h, type) {
+  function getLocalAngle(thinned, cx, cy, w, h, orient, blockW, blockH, blockSize, type) {
     const radius = 8;
-    const angles = [];
     const vectors = [];
 
     for (let dy = -radius; dy <= radius; dy++) {
@@ -721,24 +703,25 @@
       }
     }
 
-    if (vectors.length === 0) {
-      // Fallback la orientarea blocului (nu o avem aici, deci întoarcem 0)
-      return 0;
+    // Dacă există vectori locali suficienți, calculăm media ponderată
+    let angle = null;
+    if (vectors.length >= 3) {
+      let sumX = 0;
+      let sumY = 0;
+      for (const v of vectors) {
+        const weight = 1 / (v.dist + 0.1);
+        sumX += v.dx * weight;
+        sumY += v.dy * weight;
+      }
+      angle = Math.atan2(sumY, sumX);
+      if (angle < 0) angle += Math.PI;
+      else if (angle >= Math.PI) angle -= Math.PI;
+    } else {
+      // Fallback la orientarea blocului
+      const bx = Math.max(0, Math.min(blockW - 1, Math.floor(cx / blockSize)));
+      const by = Math.max(0, Math.min(blockH - 1, Math.floor(cy / blockSize)));
+      angle = orient[by * blockW + bx];
     }
-
-    // Calculăm media vectorială ponderată invers proporțional cu distanța
-    let sumX = 0;
-    let sumY = 0;
-    for (const v of vectors) {
-      const weight = 1 / (v.dist + 0.1);
-      sumX += v.dx * weight;
-      sumY += v.dy * weight;
-    }
-
-    let angle = Math.atan2(sumY, sumX);
-    // Normalizăm la [0, π)
-    if (angle < 0) angle += Math.PI;
-    else if (angle >= Math.PI) angle -= Math.PI;
 
     return angle;
   }
@@ -763,8 +746,6 @@
       return false;
     };
 
-    // Calculăm distanța minimă medie dintre creste (1/frecvență)
-    // pentru fiecare minuție, folosind frecvența din blocul respectiv
     const getMinDistForMinutia = (x, y) => {
       const bx = Math.floor(x / blockSize);
       const by = Math.floor(y / blockSize);
@@ -796,7 +777,6 @@
       }
     }
 
-    // Limităm numărul maxim
     return filtered.length > MAX_MINUTIAE ? filtered.slice(0, MAX_MINUTIAE) : filtered;
   }
 
@@ -840,14 +820,10 @@
         if (usedB[j]) continue;
         const b = listB[j];
 
-        // Verificăm tipul: dacă tipurile diferă, permitem dar cu penalizare
-        const typePenalty = tp.type === b.type ? 0 : 0.3; // penalizare la scor
-
         const d = Math.hypot(tp.x - b.x, tp.y - b.y);
         if (d <= MATCH_DISTANCE_THRESHOLD) {
           const aDiff = angleDiff(tp.angle, b.angle);
           if (aDiff <= MATCH_ANGLE_THRESHOLD) {
-            // Dacă găsim o potrivire mai bună (distanță mai mică) o actualizăm
             if (d < bestDist) {
               bestDist = d;
               bestAngleDiff = aDiff;
@@ -859,7 +835,6 @@
 
       if (bestIdx >= 0) {
         usedB[bestIdx] = true;
-        // Calculăm calitatea potrivirii
         const quality = Math.exp(
           - (bestDist * bestDist) / (2 * MATCH_SIGMA_DIST * MATCH_SIGMA_DIST)
           - (bestAngleDiff * bestAngleDiff) / (2 * MATCH_SIGMA_ANGLE * MATCH_SIGMA_ANGLE)
@@ -870,7 +845,6 @@
 
     const matchedCount = matches.length;
     const totalQuality = matches.reduce((sum, m) => sum + m.quality, 0);
-    // Scorul normalizat: calitatea totală / max(1, media numărului de minuții)
     const avgCount = (listA.length + listB.length) / 2;
     const score = totalQuality / Math.max(1, avgCount);
 
@@ -889,9 +863,18 @@
 
     for (const refA of listA) {
       for (const refB of listB) {
-        // Încercăm ambele rotații posibile
         const baseTheta = refB.angle - refA.angle;
-        const rotations = [baseTheta, baseTheta + Math.PI];
+        // Încercăm rotația de bază și variante fine în jur
+        const rotations = [];
+        for (let k = -ROTATION_FINE_STEPS; k <= ROTATION_FINE_STEPS; k++) {
+          const delta = (ROTATION_FINE_RANGE * k) / ROTATION_FINE_STEPS;
+          rotations.push(baseTheta + delta);
+        }
+        // Adăugăm și rotația cu π (orientarea crestelor e modulo π)
+        for (let k = -ROTATION_FINE_STEPS; k <= ROTATION_FINE_STEPS; k++) {
+          const delta = (ROTATION_FINE_RANGE * k) / ROTATION_FINE_STEPS;
+          rotations.push(baseTheta + Math.PI + delta);
+        }
 
         for (const theta of rotations) {
           const result = evaluateTransformation(listA, listB, theta, refA, refB);
@@ -903,7 +886,6 @@
       }
     }
 
-    // Convertim scorul de calitate într-un procent (0-100)
     const percentage = Math.min(100, bestResult.qualityScore * 100);
     return {
       score: percentage,
@@ -938,9 +920,7 @@
     let thinned = zhangSuen(binary, w, h);
     thinned = pruneSkeleton(thinned, w, h, PRUNE_MIN_LENGTH);
 
-    const rawMinutiae = extractMinutiae(thinned, orientField, freqField, maskField, w, h, BLOCK_SIZE);
-    // extractMinutiae apelează deja filterMinutiae, deci rawMinutiae este deja filtrat
-    const minutiae = rawMinutiae;
+    const minutiae = extractMinutiae(thinned, orientField, freqField, maskField, w, h, BLOCK_SIZE);
 
     return {
       canvas,
