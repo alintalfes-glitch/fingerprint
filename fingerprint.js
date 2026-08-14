@@ -5,15 +5,19 @@
   // ============================================================
   // Constante globale pentru procesare și matching
   // ============================================================
-  const BLOCK_SIZE = 16;
-  const MAX_WORK_SIZE = 500;
-  const FOREGROUND_STD_THRESHOLD = 12;
-  const ADAPTIVE_THRESHOLD_DELTA = 8;
-  const MINUTIA_MIN_DIST = 8;
-  const MAX_MINUTIAE = 100;
-  const MATCH_DISTANCE_THRESHOLD = 12;
-  const MATCH_ANGLE_THRESHOLD = 20 * Math.PI / 180;
-  const MAX_MATCH_CANDIDATES = 60;
+  const BLOCK_SIZE = 16;                     // dimensiunea blocului pentru orientare/mască/frecvență
+  const MAX_WORK_SIZE = 500;                 // latura maximă a imaginii de lucru (px)
+  const FOREGROUND_STD_THRESHOLD = 10;       // prag deviație standard pentru masca foreground
+  const ADAPTIVE_WINDOW = 15;                // dimensiunea ferestrei locale pentru binarizare adaptivă
+  const ADAPTIVE_K = 0.5;                    // factorul de corecție pentru pragul local
+  const MINUTIA_MIN_DIST_BASE = 8;           // distanță de bază minimă între minuții (px)
+  const MAX_MINUTIAE = 100;                  // numărul maxim de minuții extrase
+  const MATCH_DISTANCE_THRESHOLD = 12;       // prag distanță (px) pentru perechi potrivite
+  const MATCH_ANGLE_THRESHOLD = 20 * Math.PI / 180; // prag unghi (radiani) pentru perechi potrivite
+  const MATCH_SIGMA_DIST = 5;                // sigma pentru ponderare distanță
+  const MATCH_SIGMA_ANGLE = 10 * Math.PI / 180; // sigma pentru ponderare unghi
+  const MAX_MATCH_CANDIDATES = 60;           // limităm perechile candidat pentru performanță
+  const PRUNE_MIN_LENGTH = 8;                // lungime minimă a ramurilor păstrate în schelet
 
   // ============================================================
   // Funcții utilitare pentru imagine
@@ -63,19 +67,13 @@
 
   /**
    * Normalizează contrastul (media și varianța) conform metodei Hong et al.
-   * @param {Uint8ClampedArray} gray - imagine grayscale 0-255.
-   * @param {number} w
-   * @param {number} h
-   * @returns {Uint8ClampedArray} - imagine normalizată 0-255.
    */
   function normalizeContrast(gray, w, h) {
     const len = w * h;
-    // Evităm diviziunea la zero pentru imagini goale (caz extrem)
     if (len === 0) return new Uint8ClampedArray(gray);
 
     let sum = 0;
     for (let i = 0; i < len; i++) sum += gray[i];
-
     const mean = sum / len;
 
     let variance = 0;
@@ -86,9 +84,7 @@
     variance /= len;
     const std = Math.sqrt(variance);
 
-    if (std < 1e-6) {
-      return new Uint8ClampedArray(gray);
-    }
+    if (std < 1e-6) return new Uint8ClampedArray(gray);
 
     const desiredMean = 128;
     const desiredStd = 60;
@@ -171,7 +167,58 @@
       }
     }
 
+    // Netezirea câmpului de orientare (filtru vectorial circular)
+    smoothOrientationField(orient, blockW, blockH);
+
     return { orient, blockW, blockH };
+  }
+
+  /**
+   * Netezește câmpul de orientare folosind o fereastră 3x3.
+   * Unghiurile sunt tratate modulo π, deci folosim vectori (cos, sin).
+   * @param {Float32Array} orient - vectorul de orientări
+   * @param {number} blockW
+   * @param {number} blockH
+   */
+  function smoothOrientationField(orient, blockW, blockH) {
+    const smoothed = new Float32Array(orient.length);
+    const neighbors = [
+      [-1, -1], [0, -1], [1, -1],
+      [-1, 0], [0, 0], [1, 0],
+      [-1, 1], [0, 1], [1, 1]
+    ];
+
+    for (let by = 0; by < blockH; by++) {
+      for (let bx = 0; bx < blockW; bx++) {
+        let sumSin = 0;
+        let sumCos = 0;
+        let count = 0;
+
+        for (const [dx, dy] of neighbors) {
+          const nx = bx + dx;
+          const ny = by + dy;
+          if (nx >= 0 && nx < blockW && ny >= 0 && ny < blockH) {
+            const angle = orient[ny * blockW + nx];
+            sumSin += Math.sin(2 * angle);
+            sumCos += Math.cos(2 * angle);
+            count++;
+          }
+        }
+
+        if (count > 0) {
+          const avgAngle = 0.5 * Math.atan2(sumSin, sumCos);
+          // Normalizare la [0, π)
+          smoothed[by * blockW + bx] = (avgAngle < 0) ? avgAngle + Math.PI : avgAngle;
+        } else {
+          smoothed[by * blockW + bx] = orient[by * blockW + bx];
+        }
+      }
+    }
+
+    // Copiem rezultatul înapoi
+    for (let i = 0; i < orient.length; i++) {
+      orient[i] = smoothed[i];
+    }
   }
 
   function getOrientationAt(x, y, orient, blockW, blockH, blockSize) {
@@ -207,7 +254,7 @@
 
     for (let by = 0; by < blockH; by++) {
       for (let bx = 0; bx < blockW; bx++) {
-        const angle = orient[by * blockW + bx] + Math.PI / 2;
+        const angle = orient[by * blockW + bx] + Math.PI / 2; // perpendicular pe creste
         const cx = (bx + 0.5) * blockSize;
         const cy = (by + 0.5) * blockSize;
 
@@ -317,39 +364,78 @@
   }
 
   // ============================================================
-  // Pasul 6: Binarizare adaptivă
+  // Pasul 6: Binarizare adaptivă îmbunătățită
   // ============================================================
+  // Folosim o fereastră locală de 15x15 pentru a calcula media și
+  // deviația standard. Pragul = media - ADAPTIVE_K * std.
+  // Calcul rapid folosind imaginea integrală pentru sumă și sumă de pătrate.
+
+  function computeIntegralImages(gray, w, h) {
+    const integral = new Float64Array((w + 1) * (h + 1));
+    const integralSq = new Float64Array((w + 1) * (h + 1));
+
+    for (let y = 1; y <= h; y++) {
+      for (let x = 1; x <= w; x++) {
+        const idx = (y - 1) * w + (x - 1);
+        const v = gray[idx];
+        const iPrev = (y - 1) * (w + 1) + x;
+        const jPrev = y * (w + 1) + (x - 1);
+        const ijPrev = (y - 1) * (w + 1) + (x - 1);
+        const iCurr = y * (w + 1) + x;
+
+        integral[iCurr] = integral[iPrev] + integral[jPrev] - integral[ijPrev] + v;
+        integralSq[iCurr] = integralSq[iPrev] + integralSq[jPrev] - integralSq[ijPrev] + v * v;
+      }
+    }
+
+    return { integral, integralSq, width: w + 1, height: h + 1 };
+  }
 
   function adaptiveBinarize(gray, maskField, w, h, blockSize) {
-    const { mask, blockW, blockH } = maskField;
+    const { mask } = maskField;
+    const { integral, integralSq, width: iw, height: ih } = computeIntegralImages(gray, w, h);
     const binary = new Uint8Array(w * h);
+    const windowHalf = Math.floor(ADAPTIVE_WINDOW / 2);
 
-    for (let by = 0; by < blockH; by++) {
-      for (let bx = 0; bx < blockW; bx++) {
-        if (mask[by * blockW + bx] === 0) continue;
+    for (let y = 0; y < h; y++) {
+      const bx = Math.floor(x => x / blockSize); // placeholder, nu folosim aici
+    }
 
-        const startX = bx * blockSize;
-        const startY = by * blockSize;
-        const endX = Math.min(w, startX + blockSize);
-        const endY = Math.min(h, startY + blockSize);
-
-        let sum = 0;
-        let n = 0;
-        for (let y = startY; y < endY; y++) {
-          for (let x = startX; x < endX; x++) {
-            sum += gray[y * w + x];
-            n++;
-          }
+    // Iterăm pixel cu pixel
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        // Determinăm blocul pentru mască
+        const blockX = Math.floor(x / blockSize);
+        const blockY = Math.floor(y / blockSize);
+        // Dacă blocul nu este foreground, rămâne 0
+        if (mask[blockY * Math.ceil(w / blockSize) + blockX] === 0) {
+          binary[y * w + x] = 0;
+          continue;
         }
 
-        const mean = sum / n;
-        const threshold = mean - ADAPTIVE_THRESHOLD_DELTA;
+        // Definim fereastra locală
+        const x1 = Math.max(0, x - windowHalf);
+        const x2 = Math.min(w - 1, x + windowHalf);
+        const y1 = Math.max(0, y - windowHalf);
+        const y2 = Math.min(h - 1, y + windowHalf);
 
-        for (let y = startY; y < endY; y++) {
-          for (let x = startX; x < endX; x++) {
-            binary[y * w + x] = gray[y * w + x] < threshold ? 1 : 0;
-          }
-        }
+        const area = (x2 - x1 + 1) * (y2 - y1 + 1);
+
+        // Coordonate în imaginea integrală (indexate de la 1)
+        const ix1 = x1;
+        const iy1 = y1;
+        const ix2 = x2 + 1;
+        const iy2 = y2 + 1;
+
+        const sum = integral[iy2 * iw + ix2] - integral[iy1 * iw + ix2] - integral[iy2 * iw + ix1] + integral[iy1 * iw + ix1];
+        const sumSq = integralSq[iy2 * iw + ix2] - integralSq[iy1 * iw + ix2] - integralSq[iy2 * iw + ix1] + integralSq[iy1 * iw + ix1];
+
+        const mean = sum / area;
+        const variance = Math.max(0, sumSq / area - mean * mean);
+        const std = Math.sqrt(variance);
+
+        const threshold = mean - ADAPTIVE_K * std;
+        binary[y * w + x] = gray[y * w + x] < threshold ? 1 : 0;
       }
     }
 
@@ -369,7 +455,6 @@
       changed = false;
       const marker = new Uint8Array(w * h);
 
-      // Prima iterație parțială
       for (let y = 1; y < h - 1; y++) {
         for (let x = 1; x < w - 1; x++) {
           const i = y * w + x;
@@ -415,7 +500,6 @@
       changed = false;
       const marker2 = new Uint8Array(w * h);
 
-      // A doua iterație parțială
       for (let y = 1; y < h - 1; y++) {
         for (let x = 1; x < w - 1; x++) {
           const i = y * w + x;
@@ -463,13 +547,114 @@
   }
 
   // ============================================================
+  // Eliminarea ramurilor scurte din schelet (pruning)
+  // ============================================================
+  /**
+   * Parcurge scheletul și elimină ramurile cu lungime mai mică de prag.
+   * O ramură este un lanț de pixeli între o terminație (CN=1) și o joncțiune (CN>=3)
+   * sau o altă terminație.
+   */
+  function pruneSkeleton(thinned, w, h, minLength = PRUNE_MIN_LENGTH) {
+    const img = new Uint8Array(thinned);
+    const visited = new Uint8Array(w * h);
+
+    function getNeighborCoords(x, y) {
+      const neigh = [];
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          if (dx === 0 && dy === 0) continue;
+          const nx = x + dx;
+          const ny = y + dy;
+          if (nx >= 0 && nx < w && ny >= 0 && ny < h && img[ny * w + nx] === 1) {
+            neigh.push([nx, ny]);
+          }
+        }
+      }
+      return neigh;
+    }
+
+    function countNeighbors(x, y) {
+      return getNeighborCoords(x, y).length;
+    }
+
+    function isEndPoint(x, y) {
+      return countNeighbors(x, y) === 1;
+    }
+
+    function isJunction(x, y) {
+      return countNeighbors(x, y) >= 3;
+    }
+
+    function traceBranch(startX, startY) {
+      const branch = [[startX, startY]];
+      let curX = startX;
+      let curY = startY;
+      let prevX = -1;
+      let prevY = -1;
+      const maxSteps = 50;
+
+      while (branch.length < maxSteps) {
+        const neighbors = getNeighborCoords(curX, curY).filter(([nx, ny]) => nx !== prevX || ny !== prevY);
+        if (neighbors.length === 0) break;
+        const [nextX, nextY] = neighbors[0];
+        branch.push([nextX, nextY]);
+        prevX = curX;
+        prevY = curY;
+        curX = nextX;
+        curY = nextY;
+
+        if (isEndPoint(curX, curY) || isJunction(curX, curY)) break;
+      }
+
+      return branch;
+    }
+
+    // Găsim toate terminațiile și pornim trace
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        if (img[y * w + x] === 1 && !visited[y * w + x] && isEndPoint(x, y)) {
+          const branch = traceBranch(x, y);
+          if (branch.length < minLength) {
+            // Eliminăm ramura (doar dacă nu se termină în alt capăt care e joncțiune importantă)
+            let remove = true;
+            const [lastX, lastY] = branch[branch.length - 1];
+            if (isEndPoint(lastX, lastY) && branch.length >= 2) {
+              // Ramura dintre două terminații scurte: eliminăm doar dacă ambele capete sunt terminații
+              remove = true;
+            } else if (isJunction(lastX, lastY) && branch.length < minLength) {
+              // Ramura scurtă atașată la joncțiune: eliminăm, dar păstrăm joncțiunea
+              remove = true;
+            } else {
+              remove = false;
+            }
+
+            if (remove) {
+              for (const [px, py] of branch) {
+                img[py * w + px] = 0;
+              }
+            }
+          }
+
+          // Marcăm ramura ca vizitată indiferent dacă am eliminat sau nu
+          for (const [px, py] of branch) {
+            visited[py * w + px] = 1;
+          }
+        }
+      }
+    }
+
+    return img;
+  }
+
+  // ============================================================
   // Pasul 8: Extragerea minuțiilor
   // ============================================================
 
-  function extractMinutiae(thinned, orientField, maskField, w, h, blockSize) {
+  function extractMinutiae(thinned, orientField, freqField, maskField, w, h, blockSize) {
     const { orient, blockW, blockH } = orientField;
     const minutiae = [];
 
+    // Folosim coordonate pe schelet
     for (let y = 1; y < h - 1; y++) {
       for (let x = 1; x < w - 1; x++) {
         const i = y * w + x;
@@ -492,31 +677,83 @@
         cn /= 2;
 
         if (cn === 1 || cn === 3) {
-          const angle = getOrientationAt(x, y, orient, blockW, blockH, blockSize);
+          // Determinăm tipul
+          const type = cn === 1 ? 'ending' : 'bifurcation';
+
+          // Calculăm unghiul local al crestei din vecinătate
+          const angle = getLocalAngle(thinned, x, y, w, h, type);
+
           minutiae.push({
             x,
             y,
             angle,
-            type: cn === 1 ? 'ending' : 'bifurcation'
+            type
           });
         }
       }
     }
 
-    return minutiae;
+    // Filtrarea inițială a minuțiilor false (va fi rafinată mai jos)
+    return filterMinutiae(minutiae, maskField, freqField, w, h, blockSize);
+  }
+
+  /**
+   * Calculează unghiul local al minuției folosind direcția dominantă a crestelor din jur.
+   * Pentru terminație, unghiul este direcția de la minuție spre interiorul crestei.
+   * Pentru bifurcație, unghiul este media direcțiilor celor trei ramuri.
+   */
+  function getLocalAngle(thinned, cx, cy, w, h, type) {
+    const radius = 8;
+    const angles = [];
+    const vectors = [];
+
+    for (let dy = -radius; dy <= radius; dy++) {
+      for (let dx = -radius; dx <= radius; dx++) {
+        if (dx === 0 && dy === 0) continue;
+        const nx = cx + dx;
+        const ny = cy + dy;
+        if (nx >= 0 && nx < w && ny >= 0 && ny < h && thinned[ny * w + nx] === 1) {
+          const dist = Math.sqrt(dx * dx + dy * dy);
+          if (dist > 0) {
+            vectors.push({ dx: dx / dist, dy: dy / dist, dist });
+          }
+        }
+      }
+    }
+
+    if (vectors.length === 0) {
+      // Fallback la orientarea blocului (nu o avem aici, deci întoarcem 0)
+      return 0;
+    }
+
+    // Calculăm media vectorială ponderată invers proporțional cu distanța
+    let sumX = 0;
+    let sumY = 0;
+    for (const v of vectors) {
+      const weight = 1 / (v.dist + 0.1);
+      sumX += v.dx * weight;
+      sumY += v.dy * weight;
+    }
+
+    let angle = Math.atan2(sumY, sumX);
+    // Normalizăm la [0, π)
+    if (angle < 0) angle += Math.PI;
+    else if (angle >= Math.PI) angle -= Math.PI;
+
+    return angle;
   }
 
   // ============================================================
   // Pasul 9: Filtrarea minuțiilor false
   // ============================================================
 
-  function filterMinutiae(minutiae, maskField, w, h, blockSize, minDist = MINUTIA_MIN_DIST) {
+  function filterMinutiae(minutiae, maskField, freqField, w, h, blockSize) {
     const { mask, blockW, blockH } = maskField;
+    const filtered = [];
 
     const isNearBoundary = (x, y) => {
       const bx = Math.floor(x / blockSize);
       const by = Math.floor(y / blockSize);
-
       for (let ny = by - 1; ny <= by + 1; ny++) {
         for (let nx = bx - 1; nx <= bx + 1; nx++) {
           if (nx < 0 || ny < 0 || nx >= blockW || ny >= blockH) return true;
@@ -526,12 +763,27 @@
       return false;
     };
 
-    const filtered = minutiae.filter(m => !isNearBoundary(m.x, m.y));
+    // Calculăm distanța minimă medie dintre creste (1/frecvență)
+    // pentru fiecare minuție, folosind frecvența din blocul respectiv
+    const getMinDistForMinutia = (x, y) => {
+      const bx = Math.floor(x / blockSize);
+      const by = Math.floor(y / blockSize);
+      if (bx >= 0 && bx < blockW && by >= 0 && by < blockH) {
+        const f = freqField[by * blockW + bx];
+        if (f > 0) {
+          const ridgeDist = 1 / f;
+          return Math.max(MINUTIA_MIN_DIST_BASE, 1.5 * ridgeDist);
+        }
+      }
+      return MINUTIA_MIN_DIST_BASE;
+    };
 
-    const kept = [];
-    for (const m of filtered) {
+    for (const m of minutiae) {
+      if (isNearBoundary(m.x, m.y)) continue;
+
       let tooClose = false;
-      for (const k of kept) {
+      const minDist = getMinDistForMinutia(m.x, m.y);
+      for (const k of filtered) {
         const dx = m.x - k.x;
         const dy = m.y - k.y;
         if (Math.hypot(dx, dy) < minDist) {
@@ -539,10 +791,13 @@
           break;
         }
       }
-      if (!tooClose) kept.push(m);
+      if (!tooClose) {
+        filtered.push(m);
+      }
     }
 
-    return kept.length > MAX_MINUTIAE ? kept.slice(0, MAX_MINUTIAE) : kept;
+    // Limităm numărul maxim
+    return filtered.length > MAX_MINUTIAE ? filtered.slice(0, MAX_MINUTIAE) : filtered;
   }
 
   // ============================================================
@@ -562,16 +817,66 @@
     return {
       x: refB.x + dx * cos - dy * sin,
       y: refB.y + dx * sin + dy * cos,
-      angle: p.angle + theta
+      angle: p.angle + theta,
+      type: p.type
     };
   }
 
   /**
-   * Găsește cea mai bună aliniere și calculează scorul de similaritate.
-   * @param {Array} minA - minuții set A
-   * @param {Array} minB - minuții set B
-   * @returns {{score:number, pairs:Array, matchedCount:number}}
+   * Calculează scorul de potrivire pentru o transformare dată.
+   * Întoarce numărul de perechi potrivite și scorul ponderat.
    */
+  function evaluateTransformation(listA, listB, theta, refA, refB) {
+    const transformed = listA.map(p => transformPoint(p, refA, refB, theta));
+    const usedB = new Array(listB.length).fill(false);
+    const matches = [];
+
+    for (const tp of transformed) {
+      let bestIdx = -1;
+      let bestDist = Infinity;
+      let bestAngleDiff = Infinity;
+
+      for (let j = 0; j < listB.length; j++) {
+        if (usedB[j]) continue;
+        const b = listB[j];
+
+        // Verificăm tipul: dacă tipurile diferă, permitem dar cu penalizare
+        const typePenalty = tp.type === b.type ? 0 : 0.3; // penalizare la scor
+
+        const d = Math.hypot(tp.x - b.x, tp.y - b.y);
+        if (d <= MATCH_DISTANCE_THRESHOLD) {
+          const aDiff = angleDiff(tp.angle, b.angle);
+          if (aDiff <= MATCH_ANGLE_THRESHOLD) {
+            // Dacă găsim o potrivire mai bună (distanță mai mică) o actualizăm
+            if (d < bestDist) {
+              bestDist = d;
+              bestAngleDiff = aDiff;
+              bestIdx = j;
+            }
+          }
+        }
+      }
+
+      if (bestIdx >= 0) {
+        usedB[bestIdx] = true;
+        // Calculăm calitatea potrivirii
+        const quality = Math.exp(
+          - (bestDist * bestDist) / (2 * MATCH_SIGMA_DIST * MATCH_SIGMA_DIST)
+          - (bestAngleDiff * bestAngleDiff) / (2 * MATCH_SIGMA_ANGLE * MATCH_SIGMA_ANGLE)
+        ) * (tp.type === listB[bestIdx].type ? 1 : 0.7);
+        matches.push({ a: tp, b: listB[bestIdx], distance: bestDist, quality });
+      }
+    }
+
+    const matchedCount = matches.length;
+    const totalQuality = matches.reduce((sum, m) => sum + m.quality, 0);
+    // Scorul normalizat: calitatea totală / max(1, media numărului de minuții)
+    const avgCount = (listA.length + listB.length) / 2;
+    const score = totalQuality / Math.max(1, avgCount);
+
+    return { matchedCount, qualityScore: score, matches };
+  }
+
   function matchMinutiae(minA, minB) {
     if (!minA.length || !minB.length) {
       return { score: 0, pairs: [], matchedCount: 0 };
@@ -580,65 +885,30 @@
     const listA = minA.slice(0, MAX_MATCH_CANDIDATES);
     const listB = minB.slice(0, MAX_MATCH_CANDIDATES);
 
-    let bestMatches = [];
-    let bestScore = 0;
+    let bestResult = { matchedCount: 0, qualityScore: 0, matches: [] };
 
     for (const refA of listA) {
       for (const refB of listB) {
-        // Diferența de unghi de bază (modulo π)
+        // Încercăm ambele rotații posibile
         const baseTheta = refB.angle - refA.angle;
-
-        // Încercăm ambele rotații posibile: θ și θ+π
-        // deoarece orientarea crestelor este definită doar modulo π.
         const rotations = [baseTheta, baseTheta + Math.PI];
 
         for (const theta of rotations) {
-          const transformed = listA.map(p => transformPoint(p, refA, refB, theta));
-          const usedB = new Array(listB.length).fill(false);
-          const matches = [];
-
-          for (const tp of transformed) {
-            let bestIdx = -1;
-            let bestDist = MATCH_DISTANCE_THRESHOLD;
-
-            for (let j = 0; j < listB.length; j++) {
-              if (usedB[j]) continue;
-              const b = listB[j];
-
-              const d = Math.hypot(tp.x - b.x, tp.y - b.y);
-              if (d <= bestDist && angleDiff(tp.angle, b.angle) <= MATCH_ANGLE_THRESHOLD) {
-                bestDist = d;
-                bestIdx = j;
-              }
-            }
-
-            if (bestIdx >= 0) {
-              usedB[bestIdx] = true;
-              matches.push({
-                a: tp,
-                b: listB[bestIdx],
-                distance: bestDist
-              });
-            }
-          }
-
-          const matchedCount = matches.length;
-          const totalA = minA.length;
-          const totalB = minB.length;
-          const score = (matchedCount / ((totalA + totalB) / 2)) * 100;
-
-          if (matchedCount > bestMatches.length) {
-            bestMatches = matches;
-            bestScore = score;
+          const result = evaluateTransformation(listA, listB, theta, refA, refB);
+          if (result.matchedCount > bestResult.matchedCount ||
+              (result.matchedCount === bestResult.matchedCount && result.qualityScore > bestResult.qualityScore)) {
+            bestResult = result;
           }
         }
       }
     }
 
+    // Convertim scorul de calitate într-un procent (0-100)
+    const percentage = Math.min(100, bestResult.qualityScore * 100);
     return {
-      score: Math.min(100, bestScore),
-      pairs: bestMatches,
-      matchedCount: bestMatches.length
+      score: percentage,
+      pairs: bestResult.matches,
+      matchedCount: bestResult.matchedCount
     };
   }
 
@@ -654,23 +924,23 @@
 
     const gray = getGrayscale(canvas.getContext('2d'), w, h);
     const normalized = normalizeContrast(gray, w, h);
-
     putNormalizedToCanvas(canvas, normalized, w, h);
 
     const gradients = computeSobel(normalized, w, h);
     const orientField = computeOrientationField(gradients, w, h, BLOCK_SIZE);
 
-    const frequency = estimateFrequency(normalized, orientField, w, h, BLOCK_SIZE);
+    const freqField = estimateFrequency(normalized, orientField, w, h, BLOCK_SIZE);
 
     const maskField = segment(normalized, w, h, BLOCK_SIZE);
 
     const binary = adaptiveBinarize(normalized, maskField, w, h, BLOCK_SIZE);
 
-    const thinned = zhangSuen(binary, w, h);
+    let thinned = zhangSuen(binary, w, h);
+    thinned = pruneSkeleton(thinned, w, h, PRUNE_MIN_LENGTH);
 
-    const rawMinutiae = extractMinutiae(thinned, orientField, maskField, w, h, BLOCK_SIZE);
-
-    const minutiae = filterMinutiae(rawMinutiae, maskField, w, h, BLOCK_SIZE, MINUTIA_MIN_DIST);
+    const rawMinutiae = extractMinutiae(thinned, orientField, freqField, maskField, w, h, BLOCK_SIZE);
+    // extractMinutiae apelează deja filterMinutiae, deci rawMinutiae este deja filtrat
+    const minutiae = rawMinutiae;
 
     return {
       canvas,
@@ -678,7 +948,7 @@
       height: h,
       minutiae,
       debug: {
-        frequency,
+        frequency: freqField,
         mask: maskField.mask,
         thinned
       }
