@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="ro">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Dactilo — Comparare amprente</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="app-header">
+    <div class="logo">
+      <span class="logo-mark">DA</span>
+      <div>
+        <h1>Dactilo</h1>
+        <p class="subtitle">Analiză comparativă a minuțiilor</p>
+      </div>
+    </div>
+    <div class="header-badge">modul demonstrativ</div>
+  </header>
+
+  <main class="app-main">
+    <section class="upload-section" aria-label="Încărcare amprente">
+      <div class="upload-grid">
+        <div class="upload-card">
+          <div class="upload-zone" id="zoneA" tabindex="0" role="button" aria-label="Încarcă prima amprentă">
+            <input type="file" accept="image/*" class="file-input" id="fileA">
+            <canvas class="preview-canvas" id="previewA"></canvas>
+            <div class="upload-placeholder">
+              <span class="drop-icon">⌁</span>
+              <span class="drop-title">Amprenta A</span>
+              <span class="drop-hint">Trage fișierul aici sau <u>alege</u></span>
+            </div>
+          </div>
+          <div class="file-name" id="fileNameA"></div>
+        </div>
+
+        <div class="upload-card">
+          <div class="upload-zone" id="zoneB" tabindex="0" role="button" aria-label="Încarcă a doua amprentă">
+            <input type="file" accept="image/*" class="file-input" id="fileB">
+            <canvas class="preview-canvas" id="previewB"></canvas>
+            <div class="upload-placeholder">
+              <span class="drop-icon">⌁</span>
+              <span class="drop-title">Amprenta B</span>
+              <span class="drop-hint">Trage fișierul aici sau <u>alege</u></span>
+            </div>
+          </div>
+          <div class="file-name" id="fileNameB"></div>
+        </div>
+      </div>
+
+      <div class="actions">
+        <button id="compareBtn" class="compare-btn" disabled>Compară amprentele</button>
+      </div>
+    </section>
+
+    <div id="loading" class="loading" hidden>
+      <span class="spinner" aria-hidden="true"></span>
+      <span>Procesare imagini și potrivire minuții…</span>
+    </div>
+
+    <section id="results" class="results" hidden aria-live="polite">
+      <div class="score-panel">
+        <div class="score-label">Scor de similaritate</div>
+        <div id="score" class="score-value">—</div>
+        <div id="verdict" class="verdict">…</div>
+      </div>
+
+      <div class="result-canvases">
+        <figure class="result-figure">
+          <canvas id="resultA" class="result-canvas"></canvas>
+          <figcaption>Amprenta A · minuții detectate</figcaption>
+        </figure>
+        <figure class="result-figure">
+          <canvas id="resultB" class="result-canvas"></canvas>
+          <figcaption>Amprenta B · minuții detectate</figcaption>
+        </figure>
+      </div>
+    </section>
+  </main>
+
+  <footer class="app-footer">
+    <p>
+      <strong>Notă:</strong> aceasta este o implementare demonstrativă/educațională și nu un sistem biometric de nivel forensic sau de securitate reală.
+    </p>
+  </footer>
+
+  <script src="fingerprint.js"></script>
+  <script>
+    (function() {
+      'use strict';
+
+      const zoneA = document.getElementById('zoneA');
+      const zoneB = document.getElementById('zoneB');
+      const fileA = document.getElementById('fileA');
+      const fileB = document.getElementById('fileB');
+      const previewA = document.getElementById('previewA');
+      const previewB = document.getElementById('previewB');
+      const fileNameA = document.getElementById('fileNameA');
+      const fileNameB = document.getElementById('fileNameB');
+      const compareBtn = document.getElementById('compareBtn');
+      const loading = document.getElementById('loading');
+      const results = document.getElementById('results');
+      const scoreEl = document.getElementById('score');
+      const verdictEl = document.getElementById('verdict');
+      const resultA = document.getElementById('resultA');
+      const resultB = document.getElementById('resultB');
+      const MATCH_THRESHOLD = 45; // %
+
+      const state = { fileA: null, fileB: null, fpA: null, fpB: null };
+
+      function setupZone(zone, input, preview, fileName, side) {
+        zone.addEventListener('click', () => input.click());
+        zone.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            input.click();
+          }
+        });
+
+        input.addEventListener('change', (e) => {
+          const file = e.target.files[0];
+          if (file) loadPreview(file, side);
+        });
+
+        zone.addEventListener('dragover', (e) => {
+          e.preventDefault();
+          zone.classList.add('dragover');
+        });
+        zone.addEventListener('dragleave', () => {
+          zone.classList.remove('dragover');
+        });
+        zone.addEventListener('drop', (e) => {
+          e.preventDefault();
+          zone.classList.remove('dragover');
+          const file = e.dataTransfer.files[0];
+          if (file) loadPreview(file, side);
+        });
+      }
+
+      function loadPreview(file, side) {
+        if (!file || !file.type.startsWith('image/')) return;
+        if (side === 'A') {
+          state.fileA = file;
+          fileNameA.textContent = file.name;
+        } else {
+          state.fileB = file;
+          fileNameB.textContent = file.name;
+        }
+
+        const reader = new FileReader();
+        reader.onload = (e) => {
+          const img = new Image();
+          img.onload = () => {
+            const canvas = side === 'A' ? previewA : previewB;
+            const zone = side === 'A' ? zoneA : zoneB;
+            drawImageToCanvas(canvas, img, 300, 220);
+            zone.classList.add('has-image');
+            updateCompareBtn();
+          };
+          img.src = e.target.result;
+        };
+        reader.readAsDataURL(file);
+      }
+
+      function drawImageToCanvas(canvas, img, maxW, maxH) {
+        const scale = Math.min(maxW / img.width, maxH / img.height, 1);
+        canvas.width = Math.max(1, Math.round(img.width * scale));
+        canvas.height = Math.max(1, Math.round(img.height * scale));
+        const ctx = canvas.getContext('2d');
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      }
+
+      function updateCompareBtn() {
+        compareBtn.disabled = !(state.fileA && state.fileB);
+      }
+
+      function showResults(fpA, fpB, matchResult) {
+        resultA.width = fpA.width;
+        resultA.height = fpA.height;
+        resultB.width = fpB.width;
+        resultB.height = fpB.height;
+
+        const ctxA = resultA.getContext('2d');
+        const ctxB = resultB.getContext('2d');
+        ctxA.drawImage(fpA.canvas, 0, 0);
+        ctxB.drawImage(fpB.canvas, 0, 0);
+
+        window.FingerprintProcessor.drawMinutiae(resultA, fpA.minutiae);
+        window.FingerprintProcessor.drawMinutiae(resultB, fpB.minutiae);
+
+        const score = Math.round(matchResult.score * 10) / 10;
+        scoreEl.textContent = score + '%';
+        const isMatch = matchResult.score >= MATCH_THRESHOLD;
+        verdictEl.textContent = isMatch ? 'Amprentele par să corespundă' : 'Amprentele nu corespund';
+        verdictEl.className = 'verdict ' + (isMatch ? 'match' : 'no-match');
+
+        results.hidden = false;
+      }
+
+      compareBtn.addEventListener('click', async () => {
+        if (!state.fileA || !state.fileB) return;
+
+        compareBtn.disabled = true;
+        loading.hidden = false;
+        results.hidden = true;
+
+        await new Promise(r => setTimeout(r, 30));
+
+        try {
+          const fpA = await window.FingerprintProcessor.processFile(state.fileA);
+          const fpB = await window.FingerprintProcessor.processFile(state.fileB);
+          state.fpA = fpA;
+          state.fpB = fpB;
+
+          const matchResult = window.FingerprintProcessor.matchMinutiae(fpA.minutiae, fpB.minutiae);
+          showResults(fpA, fpB, matchResult);
+        } catch (err) {
+          console.error(err);
+          verdictEl.textContent = 'Eroare la procesarea imaginilor.';
+          verdictEl.className = 'verdict no-match';
+          scoreEl.textContent = '—';
+          results.hidden = false;
+        } finally {
+          compareBtn.disabled = false;
+          loading.hidden = true;
+        }
+      });
+
+      setupZone(zoneA, fileA, previewA, fileNameA, 'A');
+      setupZone(zoneB, fileB, previewB, fileNameB, 'B');
+      updateCompareBtn();
+    })();
+  </script>
+</body>
+</html>
