@@ -97,6 +97,10 @@
     <p>
       <strong>Notă:</strong> aceasta este o implementare demonstrativă/educațională și nu un sistem biometric de nivel forensic sau de securitate reală.
     </p>
+    <p>
+      <span id="appVersion">Versiune: se încarcă…</span> · 
+      <span>Copyright © <a href="https://wa.me/alin.talfes" target="_blank" rel="noopener noreferrer">Alin Talfes</a></span>
+    </p>
   </footer>
 
   <script src="fingerprint.js"></script>
@@ -125,9 +129,23 @@
       const verdictEl = document.getElementById('verdict');
       const resultA = document.getElementById('resultA');
       const resultB = document.getElementById('resultB');
+      const appVersion = document.getElementById('appVersion');
 
       const MATCH_THRESHOLD = 45; // %
       const state = { fileA: null, fileB: null, fpA: null, fpB: null, processing: false };
+
+      // Încarcă versiunea din version.json
+      fetch('version.json')
+        .then(response => {
+          if (!response.ok) throw new Error('Nu s-a putut citi version.json');
+          return response.json();
+        })
+        .then(data => {
+          appVersion.textContent = 'Versiune: ' + (data.version || 'necunoscută');
+        })
+        .catch(() => {
+          appVersion.textContent = 'Versiune: indisponibilă';
+        });
 
       // Setup zone de upload
       function setupZone(zone, input, preview, fileName, side) {
@@ -210,7 +228,6 @@
       }
 
       function resetAll() {
-        // Dacă procesarea este în curs, o anulăm
         state.processing = false;
 
         state.fileA = null;
@@ -242,7 +259,6 @@
         verdictEl.className = 'verdict';
         scoreBarFill.style.width = '0%';
 
-        // Restabilim butonul de comparare
         compareBtnText.textContent = 'Compară amprentele';
         compareBtnSpinner.hidden = true;
 
