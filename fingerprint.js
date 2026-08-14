@@ -7,8 +7,8 @@
   // ============================================================
   const BLOCK_SIZE = 16;                      // dimensiunea blocului pentru orientare/mască/frecvență
   const MAX_WORK_SIZE = 500;                  // latura maximă a imaginii de lucru (px)
-  const FOREGROUND_STD_THRESHOLD = 10;        // prag deviație standard pentru masca foreground
-  const ADAPTIVE_WINDOW = 15;                 // dimensiunea ferestrei locale pentru binarizare adaptivă
+  const FOREGROUND_STD_THRESHOLD = 8;         // prag deviație standard pentru masca foreground (mai permisiv)
+  const ADAPTIVE_WINDOW = 13;                 // dimensiunea ferestrei locale pentru binarizare adaptivă (mai fină)
   const ADAPTIVE_K = 0.5;                     // factorul de corecție pentru pragul local
   const MINUTIA_MIN_DIST_BASE = 8;            // distanță de bază minimă între minuții (px)
   const MAX_MINUTIAE = 120;                   // numărul maxim de minuții extrase
@@ -18,8 +18,8 @@
   const MATCH_SIGMA_ANGLE = 10 * Math.PI / 180; // sigma pentru ponderare unghi
   const MAX_MATCH_CANDIDATES = 80;            // limităm perechile candidat pentru performanță
   const PRUNE_MIN_LENGTH = 6;                 // lungime minimă a ramurilor păstrate în schelet
-  const ROTATION_FINE_STEPS = 5;              // număr de variații fine de rotație testate
-  const ROTATION_FINE_RANGE = 10 * Math.PI / 180; // intervalul de căutare fină (±10 grade)
+  const ROTATION_FINE_STEPS = 7;              // număr de variații fine de rotație testate
+  const ROTATION_FINE_RANGE = 8 * Math.PI / 180; // intervalul de căutare fină (±8 grade)
 
   // ============================================================
   // Funcții utilitare pentru imagine
@@ -366,7 +366,7 @@
   // ============================================================
   // Pasul 6: Binarizare adaptivă îmbunătățită
   // ============================================================
-  // Folosim o fereastră locală de 15x15 pentru a calcula media și
+  // Folosim o fereastră locală de 13x13 pentru a calcula media și
   // deviația standard. Pragul = media - ADAPTIVE_K * std.
   // Calcul rapid folosind imaginea integrală pentru sumă și sumă de pătrate.
 
@@ -403,13 +403,11 @@
       for (let x = 0; x < w; x++) {
         const blockX = Math.floor(x / blockSize);
         const blockY = Math.floor(y / blockSize);
-        // Dacă blocul nu este foreground, rămâne 0
         if (mask[blockY * blockW + blockX] === 0) {
           binary[y * w + x] = 0;
           continue;
         }
 
-        // Definim fereastra locală
         const x1 = Math.max(0, x - windowHalf);
         const x2 = Math.min(w - 1, x + windowHalf);
         const y1 = Math.max(0, y - windowHalf);
@@ -417,7 +415,6 @@
 
         const area = (x2 - x1 + 1) * (y2 - y1 + 1);
 
-        // Coordonate în imaginea integrală (indexate de la 0)
         const ix1 = x1;
         const iy1 = y1;
         const ix2 = x2 + 1;
@@ -545,11 +542,6 @@
   // ============================================================
   // Eliminarea ramurilor scurte din schelet (pruning)
   // ============================================================
-  /**
-   * Parcurge scheletul și elimină ramurile cu lungime mai mică de prag.
-   * O ramură este un lanț de pixeli între o terminație (CN=1) și o joncțiune (CN>=3)
-   * sau o altă terminație.
-   */
   function pruneSkeleton(thinned, w, h, minLength = PRUNE_MIN_LENGTH) {
     const img = new Uint8Array(thinned);
     const visited = new Uint8Array(w * h);
@@ -611,7 +603,6 @@
         if (img[y * w + x] === 1 && !visited[y * w + x] && isEndPoint(x, y)) {
           const branch = traceBranch(x, y);
           if (branch.length < minLength) {
-            // Eliminăm ramura (doar dacă nu se termină în alt capăt care e joncțiune importantă)
             let remove = true;
             const [lastX, lastY] = branch[branch.length - 1];
             if (isEndPoint(lastX, lastY) && branch.length >= 2) {
@@ -670,20 +661,18 @@
 
         if (cn === 1 || cn === 3) {
           const type = cn === 1 ? 'ending' : 'bifurcation';
-          // Calculăm unghiul local al crestei folosind orientarea blocului + direcția locală
           const angle = getLocalAngle(thinned, x, y, w, h, orient, blockW, blockH, blockSize, type);
           minutiae.push({ x, y, angle, type });
         }
       }
     }
 
-    // Filtrarea minuțiilor false (va fi rafinată mai jos)
     return filterMinutiae(minutiae, maskField, freqField, w, h, blockSize);
   }
 
   /**
    * Calculează unghiul local al minuției folosind atât orientarea blocului,
-   * cât și direcția reală a crestelor din jur. Pentru terminații și bifurcații.
+   * cât și direcția reală a crestelor din jur.
    */
   function getLocalAngle(thinned, cx, cy, w, h, orient, blockW, blockH, blockSize, type) {
     const radius = 8;
@@ -703,8 +692,7 @@
       }
     }
 
-    // Dacă există vectori locali suficienți, calculăm media ponderată
-    let angle = null;
+    let angle;
     if (vectors.length >= 3) {
       let sumX = 0;
       let sumY = 0;
@@ -717,7 +705,6 @@
       if (angle < 0) angle += Math.PI;
       else if (angle >= Math.PI) angle -= Math.PI;
     } else {
-      // Fallback la orientarea blocului
       const bx = Math.max(0, Math.min(blockW - 1, Math.floor(cx / blockSize)));
       const by = Math.max(0, Math.min(blockH - 1, Math.floor(cy / blockSize)));
       angle = orient[by * blockW + bx];
@@ -864,13 +851,12 @@
     for (const refA of listA) {
       for (const refB of listB) {
         const baseTheta = refB.angle - refA.angle;
-        // Încercăm rotația de bază și variante fine în jur
+        // Testăm rotații fine în jurul a două soluții posibile
         const rotations = [];
         for (let k = -ROTATION_FINE_STEPS; k <= ROTATION_FINE_STEPS; k++) {
           const delta = (ROTATION_FINE_RANGE * k) / ROTATION_FINE_STEPS;
           rotations.push(baseTheta + delta);
         }
-        // Adăugăm și rotația cu π (orientarea crestelor e modulo π)
         for (let k = -ROTATION_FINE_STEPS; k <= ROTATION_FINE_STEPS; k++) {
           const delta = (ROTATION_FINE_RANGE * k) / ROTATION_FINE_STEPS;
           rotations.push(baseTheta + Math.PI + delta);
