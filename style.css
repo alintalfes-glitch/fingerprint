@@ -27,6 +27,11 @@
   padding: 0;
 }
 
+/* ASCUNDE ORICE ELEMENT CU ATRIBUTUL hidden */
+[hidden] {
+  display: none !important;
+}
+
 html, body {
   min-height: 100%;
 }
